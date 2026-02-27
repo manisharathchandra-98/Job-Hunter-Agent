@@ -1,0 +1,49 @@
+# ── AWS CDK ──────────────────────────────────────────
+cdk.out/
+.cdk.staging/
+
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# ── Virtual Environments ─────────────────────────────
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# ── Poetry ───────────────────────────────────────────
+poetry.lock
+
+# ── Node (CDK dependencies) ──────────────────────────
+node_modules/
+
+# ── Lambda build artifacts ───────────────────────────
+*.zip
+asset.*.zip
+
+# ── Test/scratch files we created ────────────────────
+body.json
+output.json
+
+# ── IDE & OS ─────────────────────────────────────────
+.vscode/
+.idea/
+.cursor/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── Logs ─────────────────────────────────────────────
+*.log
+logs/

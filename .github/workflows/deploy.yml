@@ -1,0 +1,89 @@
+name: Deploy Job Analyzer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ── Job 1: Run Tests ────────────────────────────────────────────────
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Run tests
+        run: poetry run pytest tests/ -v --tb=short
+
+  # ── Job 2: Deploy (main branch only) ───────────────────────────────
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Node.js (for CDK)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install CDK
+        run: npm install -g aws-cdk
+
+      - name: Install Python dependencies
+        run: pip install poetry && poetry install --no-root
+
+      - name: CDK Bootstrap (first-time only, safe to re-run)
+        working-directory: infrastructure
+        run: cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
+
+      - name: CDK Deploy all stacks
+        working-directory: infrastructure
+        run: cdk deploy --all --require-approval never --outputs-file cdk-outputs.json
+
+      - name: Seed salary data (idempotent)
+        run: python scripts/seed_data.py
+
+      - name: Deploy frontend to S3
+        run: |
+          BUCKET=$(cat infrastructure/cdk-outputs.json | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); \
+             print([v for k,v in list(d.values())[0].items() \
+             if 'frontend' in k.lower()][0])")
+          aws s3 sync frontend/ s3://$BUCKET/ --delete
+
+      - name: Notify deployment complete
+        run: echo "✅ Deployment complete at $(date)"

@@ -1,0 +1,128 @@
+{
+    "Comment": "Job Description Analyzer — Multi-Agent Workflow",
+    "StartAt": "ParseJob",
+    "States": {
+      "ParseJob": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "Parameters": {
+          "FunctionName": "job-analyzer-agent-parser",
+          "Payload.$": "$"
+        },
+        "ResultPath": "$",
+        "ResultSelector": { "Payload.$": "$.Payload" },
+        "OutputPath": "$.Payload",
+        "Retry": [
+          {
+            "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+            "IntervalSeconds": 3,
+            "MaxAttempts": 3,
+            "BackoffRate": 2
+          }
+        ],
+        "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "HandleError" }],
+        "Next": "EstimateSkills"
+      },
+      "EstimateSkills": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "Parameters": {
+          "FunctionName": "job-analyzer-agent-skills",
+          "Payload.$": "$"
+        },
+        "ResultPath": "$",
+        "ResultSelector": { "Payload.$": "$.Payload" },
+        "OutputPath": "$.Payload",
+        "Retry": [
+          {
+            "ErrorEquals": ["Lambda.ServiceException"],
+            "IntervalSeconds": 3,
+            "MaxAttempts": 2,
+            "BackoffRate": 2
+          }
+        ],
+        "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "HandleError" }],
+        "Next": "AnalyzeSalary"
+      },
+      "AnalyzeSalary": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "Parameters": {
+          "FunctionName": "job-analyzer-agent-salary",
+          "Payload.$": "$"
+        },
+        "ResultPath": "$",
+        "ResultSelector": { "Payload.$": "$.Payload" },
+        "OutputPath": "$.Payload",
+        "Retry": [
+          {
+            "ErrorEquals": ["Lambda.ServiceException"],
+            "IntervalSeconds": 3,
+            "MaxAttempts": 2,
+            "BackoffRate": 2
+          }
+        ],
+        "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "HandleError" }],
+        "Next": "ScoreDifficulty"
+      },
+      "ScoreDifficulty": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "Parameters": {
+          "FunctionName": "job-analyzer-agent-difficulty",
+          "Payload.$": "$"
+        },
+        "ResultPath": "$",
+        "ResultSelector": { "Payload.$": "$.Payload" },
+        "OutputPath": "$.Payload",
+        "Retry": [
+          {
+            "ErrorEquals": ["Lambda.ServiceException"],
+            "IntervalSeconds": 3,
+            "MaxAttempts": 2,
+            "BackoffRate": 2
+          }
+        ],
+        "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "HandleError" }],
+        "Next": "IdentifyGaps"
+      },
+      "IdentifyGaps": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "Parameters": {
+          "FunctionName": "job-analyzer-agent-gaps",
+          "Payload.$": "$"
+        },
+        "ResultPath": "$",
+        "ResultSelector": { "Payload.$": "$.Payload" },
+        "OutputPath": "$.Payload",
+        "Retry": [
+          {
+            "ErrorEquals": ["Lambda.ServiceException"],
+            "IntervalSeconds": 3,
+            "MaxAttempts": 2,
+            "BackoffRate": 2
+          }
+        ],
+        "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "HandleError" }],
+        "Next": "AggregateResults"
+      },
+      "AggregateResults": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "Parameters": {
+          "FunctionName": "job-analyzer-agent-aggregator",
+          "Payload.$": "$"
+        },
+        "ResultPath": "$",
+        "ResultSelector": { "Payload.$": "$.Payload" },
+        "OutputPath": "$.Payload",
+        "End": true
+      },
+      "HandleError": {
+        "Type": "Fail",
+        "ErrorPath": "$.Error",
+        "CausePath": "$.Cause"
+      }
+    }
+  }
