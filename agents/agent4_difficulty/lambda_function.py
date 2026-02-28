@@ -1,6 +1,6 @@
 """
-Agent 4: Difficulty Scorer
-Scores job difficulty 1–10 using weighted criteria and Claude reasoning.
+Agent 4: Job-Candidate Match Scorer
+Scores how well a candidate matches a job posting (0-100).
 """
 import json
 import logging
@@ -14,71 +14,47 @@ logger.setLevel(logging.INFO)
 bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
 
-PROMPT = """You are a career assessment expert.
-Score this job's difficulty for a typical candidate (1=very easy, 10=extremely demanding).
+PROMPT = """You are a senior technical recruiter scoring candidate-job fit.
+
+CANDIDATE PROFILE:
+- Current Role: {current_role}
+- Years of Experience: {years_experience}
+- Skills:
+{skills_list}
+
+JOB DESCRIPTION:
+{job_description}
+
+Score the match from 0 to 100 based on:
+1. Skill coverage — what % of required skills does the candidate have?
+2. Skill level match — does the candidate meet the proficiency requirements?
+3. Experience match — years of experience vs what the job requires
+4. Overall holistic fit
 
 Return ONLY valid JSON:
 {{
-  "score": number (1–10, decimals allowed),
-  "label": "Entry Level | Junior | Mid-Level | Senior | Expert | Specialist",
-  "explanation": "2–3 sentences justifying the score",
-  "learning_curve": "low | medium | high | very_high",
-  "estimated_prep_months": number,
-  "top_challenges": ["3 biggest challenges in this role"],
-  "scoring_breakdown": {{
-    "technical_complexity": number,
-    "experience_requirement": number,
-    "skills_breadth": number,
-    "domain_expertise": number
-  }}
+  "match_score": number (0-100),
+  "score_breakdown": {{
+    "skill_coverage": number (0-100),
+    "skill_level_match": number (0-100),
+    "experience_match": number (0-100),
+    "overall": number (0-100)
+  }},
+  "recommendation": "Strong Fit | Good Fit | Partial Fit | Weak Fit",
+  "effort_to_match": "low | medium | high",
+  "explanation": "2-3 sentence explanation of the score",
+  "job_title_detected": "string or null",
+  "experience_required_detected": number or null
 }}
-
-Weights: technical_complexity 30%, experience_requirement 25%,
-         skills_breadth 25%, domain_expertise 20%
-
-Baseline estimate from rule-based analysis: {baseline}/10
-
-Job Details:
-- Title: {job_title}
-- Seniority: {seniority}
-- Experience Required: {years_exp}
-- Skills Required: {skills}
-- Skill Level Mix: {level_mix}
-- Key Responsibilities: {responsibilities}
-- Salary Range: {salary_range}
 """
-
-
-def rule_based_baseline(parsed: dict, skills: list) -> float:
-    seniority_map = {
-        "junior": 2.5, "mid": 4.5, "senior": 6.5,
-        "lead": 7.5, "executive": 8.5, "unknown": 3.5
-    }
-    score = seniority_map.get(parsed.get("seniority_level", "unknown"), 3.5)
-
-    yrs = float(parsed.get("years_experience_min") or 0)
-    if yrs >= 10: score += 2.0
-    elif yrs >= 7: score += 1.5
-    elif yrs >= 5: score += 1.0
-    elif yrs >= 3: score += 0.5
-
-    n = len(skills)
-    if n > 15: score += 1.5
-    elif n > 10: score += 1.0
-    elif n > 5: score += 0.5
-
-    senior_ratio = sum(1 for s in skills if s.get("level") in {"senior", "expert"}) / max(n, 1)
-    score += senior_ratio * 1.5
-
-    return min(10.0, max(1.0, score))
 
 
 def call_bedrock(prompt: str) -> dict:
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1024,
+        "max_tokens": 1500,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
+        "temperature": 0.1,
     })
     resp = bedrock.invoke_model(modelId=MODEL_ID, body=body)
     content = json.loads(resp["body"].read())["content"][0]["text"].strip()
@@ -88,41 +64,54 @@ def call_bedrock(prompt: str) -> dict:
 
 
 def lambda_handler(event: dict, context) -> dict:
-    logger.info("Agent 4 — Difficulty Scorer invoked")
-    parsed = event.get("parsed_job", {})
-    skills_analysis = event.get("skills_analysis", {})
-    salary_data = event.get("salary_data", {})
-    if not parsed:
-        raise ValueError("'parsed_job' missing.")
+    logger.info("Agent 4 — Match Scorer invoked")
 
-    skills = skills_analysis.get("skills", [])
-    level_mix = {}
-    for s in skills:
-        lv = s.get("level", "mid")
-        level_mix[lv] = level_mix.get(lv, 0) + 1
+    job_description = event.get("job_description", "").strip()
 
-    baseline = rule_based_baseline(parsed, skills)
+    # Graceful handling — return 0 score instead of crashing
+    if not job_description:
+        logger.warning("Empty job_description received — returning zero match score.")
+        return {
+            **event,
+            "match_result": {
+                "match_score": 0,
+                "score_breakdown": {
+                    "skill_coverage": 0,
+                    "skill_level_match": 0,
+                    "experience_match": 0,
+                    "overall": 0,
+                },
+                "recommendation": "Weak Fit",
+                "effort_to_match": "high",
+                "explanation": "No job description provided. Cannot score match.",
+                "job_title_detected": None,
+                "experience_required_detected": None,
+            },
+            "status": "match_scored",
+        }
 
-    sal_low = salary_data.get("salary_low")
-    sal_high = salary_data.get("salary_high")
-    sal_str = f"${sal_low:,}–${sal_high:,}" if isinstance(sal_low, (int, float)) else "unknown"
+    parsed_resume = event.get("parsed_resume", {})
+    extracted_skills = event.get("extracted_skills", {})
+    skills = extracted_skills.get("skills", [])
 
-    years_min = parsed.get("years_experience_min")
-    years_max = parsed.get("years_experience_max")
-    years_exp = f"{years_min}–{years_max}" if (years_min and years_max) else str(years_min or "N/A")
+    skills_list = "\n".join([
+        f"  - {s['name']}: {s.get('level', 'unknown')} level, "
+        f"{s.get('years', '?')} years ({s.get('category', 'general')})"
+        for s in skills
+    ])
 
-    result = call_bedrock(PROMPT.format(
-        baseline=f"{baseline:.1f}",
-        job_title=parsed.get("job_title", "Unknown"),
-        seniority=parsed.get("seniority_level", "mid"),
-        years_exp=years_exp,
-        skills=", ".join(s["name"] for s in skills[:12]),
-        level_mix=json.dumps(level_mix),
-        responsibilities="; ".join(parsed.get("key_responsibilities", [])[:4]),
-        salary_range=sal_str,
+    match_result = call_bedrock(PROMPT.format(
+        current_role=parsed_resume.get("current_role", "Unknown"),
+        years_experience=parsed_resume.get("years_experience", 0),
+        skills_list=skills_list or "No skills extracted",
+        job_description=job_description[:3000]
     ))
 
-    result["score"] = max(1.0, min(10.0, float(result.get("score", baseline))))
-    logger.info(f"Difficulty: {result['score']}/10 — {result.get('label')}")
+    logger.info(f"Match score: {match_result.get('match_score')}% — "
+                f"{match_result.get('recommendation')}")
 
-    return {**event, "difficulty_score": result, "status": "difficulty_scored"}
+    return {
+        **event,
+        "match_result": match_result,
+        "status": "match_scored",
+    }

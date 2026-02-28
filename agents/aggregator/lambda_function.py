@@ -1,116 +1,124 @@
 """
-Aggregator: Final pipeline stage.
-Combines all agent outputs, stores in DynamoDB, returns clean API response.
+Aggregator: Combines all agent outputs into a final match report and stores in DynamoDB.
 """
 import json
 import logging
 import os
-import uuid
+import boto3
 from datetime import datetime, timezone
 from decimal import Decimal
-import boto3
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+CANDIDATES_TABLE = os.environ.get("CANDIDATES_TABLE_NAME", "Candidates")
 JOBS_TABLE = os.environ.get("JOBS_TABLE_NAME", "Jobs")
+MATCHES_TABLE = os.environ.get("MATCHES_TABLE_NAME", "Matches")
 
 
-def to_decimal(obj):
+def float_to_decimal(obj):
+    """Recursively convert floats to Decimal for DynamoDB."""
     if isinstance(obj, float):
         return Decimal(str(obj))
-    if isinstance(obj, dict):
-        return {k: to_decimal(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [to_decimal(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: float_to_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [float_to_decimal(i) for i in obj]
     return obj
 
 
-def build_summary(event: dict) -> dict:
-    p = event.get("parsed_job", {})
-    sa = event.get("skills_analysis", {})
-    sd = event.get("salary_data", {})
-    d = event.get("difficulty_score", {})
-    g = event.get("skills_gap", {})
-
-    return {
-        "job_title": p.get("job_title"),
-        "company": p.get("company_name"),
-        "location": p.get("location"),
-        "seniority": p.get("seniority_level"),
-        "skills_summary": {
-            "total": sa.get("total_skills", 0),
-            "primary": sa.get("primary_skills_count", 0),
-            "top_skills": [s["name"] for s in sa.get("skills", []) if s.get("is_primary")][:6],
-        },
-        "salary_summary": {
-            "low": sd.get("salary_low"),
-            "median": sd.get("salary_median"),
-            "high": sd.get("salary_high"),
-            "currency": sd.get("currency", "USD"),
-            "confidence": sd.get("confidence"),
-            "insights": sd.get("market_insights"),
-        },
-        "difficulty_summary": {
-            "score": d.get("score"),
-            "label": d.get("label"),
-            "learning_curve": d.get("learning_curve"),
-            "top_challenges": d.get("top_challenges", []),
-        },
-        "gap_summary": {
-            "match_score": g.get("match_score"),
-            "match_label": g.get("match_label"),
-            "missing_critical": [
-                x["name"] for x in g.get("missing_skills", [])
-                if x.get("priority") == "critical"
-            ],
-            "total_prep_weeks": g.get("total_preparation_weeks"),
-        },
-    }
-
-
 def lambda_handler(event: dict, context) -> dict:
-    logger.info("Aggregator invoked")
-    job_id = event.get("job_id") or str(uuid.uuid4())
-    summary = build_summary(event)
-    now = datetime.now(timezone.utc).isoformat()
+    logger.info("Aggregator — Combining all agent outputs")
 
-    item = {
-        "job_id": job_id,
-        "raw_description": event.get("job_description", "")[:3000],
-        "parsed_job": event.get("parsed_job", {}),
-        "skills_analysis": event.get("skills_analysis", {}),
-        "salary_data": event.get("salary_data", {}),
-        "difficulty_score": event.get("difficulty_score", {}),
-        "skills_gap": event.get("skills_gap", {}),
-        "summary": summary,
-        "has_candidate": bool(event.get("candidate_profile")),
-        "status": "completed",
+    now = datetime.now(timezone.utc).isoformat()
+    match_id = event.get("match_id", getattr(context, "aws_request_id", "local"))
+    candidate_id = event.get("candidate_id", match_id)
+    job_id = event.get("job_id", "")
+
+    parsed_resume = event.get("parsed_resume", {})
+    extracted_skills = event.get("extracted_skills", {})
+    market_analysis = event.get("market_analysis", {})
+    match_result = event.get("match_result", {})
+    gap_analysis = event.get("gap_analysis", {})
+
+    # ── Build candidate record ──────────────────────────────────────────
+    candidate_item = {
+        "candidate_id": candidate_id,
         "created_at": now,
         "updated_at": now,
-        "ttl": int(datetime.now(timezone.utc).timestamp()) + (90 * 86400),
+        "name": parsed_resume.get("name", "Unknown"),
+        "email": parsed_resume.get("email", ""),
+        "current_role": parsed_resume.get("current_role", ""),
+        "years_experience": parsed_resume.get("years_experience", 0),
+        "education": parsed_resume.get("education", []),
+        "certifications": parsed_resume.get("certifications", []),
+        "work_history": parsed_resume.get("work_history", []),
+        "skills": extracted_skills.get("skills", []),
+        "primary_stack": extracted_skills.get("primary_stack", []),
+        "market_value": {
+            "salary_low": market_analysis.get("salary_low", 0),
+            "salary_median": market_analysis.get("salary_median", 0),
+            "salary_high": market_analysis.get("salary_high", 0),
+        },
+        "market_position": market_analysis.get("market_position", ""),
+        "market_demand": market_analysis.get("market_demand", ""),
+        "best_suited_roles": market_analysis.get("best_suited_roles", []),
+        "last_match_id": match_id,
+        "status": "analyzed",
     }
 
+    # ── Build match record ──────────────────────────────────────────────
+    match_item = {
+        "match_id": match_id,
+        "created_at": now,
+        "updated_at": now,
+        "candidate_id": candidate_id,
+        "job_id": job_id,
+        "match_score": match_result.get("match_score", 0),
+        "recommendation": match_result.get("recommendation", ""),
+        "score_breakdown": match_result.get("score_breakdown", {}),
+        "effort_to_match": match_result.get("effort_to_match", ""),
+        "explanation": match_result.get("explanation", ""),
+        "job_title_detected": match_result.get("job_title_detected", ""),
+        "skills_analysis": gap_analysis.get("skills_analysis", {}),
+        "gaps": gap_analysis.get("gaps", {}),
+        "learning_plan": gap_analysis.get("learning_plan", {}),
+        "overall_recommendation": gap_analysis.get("overall_recommendation", ""),
+        "salary_insights": {
+            "candidate_market_value": market_analysis.get("salary_median", 0),
+            "market_position": market_analysis.get("market_position", ""),
+            "earning_potential_6months": market_analysis.get("earning_potential_6months", 0),
+            "market_insight": market_analysis.get("market_insight", ""),
+        },
+        "status": "completed",
+    }
+
+    # ── Store candidate ─────────────────────────────────────────────────
     try:
-        dynamodb.Table(JOBS_TABLE).put_item(Item=to_decimal(item))
-        stored = True
-        logger.info(f"Stored job_id={job_id} in DynamoDB")
+        dynamodb.Table(CANDIDATES_TABLE).put_item(Item=float_to_decimal(candidate_item))
+        logger.info(f"Stored candidate: {candidate_id}")
     except ClientError as e:
-        stored = False
-        logger.error(f"DynamoDB store failed: {e}")
+        logger.error(f"Failed to store candidate: {e}")
+
+    # ── Store match ─────────────────────────────────────────────────────
+    try:
+        dynamodb.Table(MATCHES_TABLE).put_item(Item=float_to_decimal(match_item))
+        logger.info(f"Stored match: {match_id}")
+    except ClientError as e:
+        logger.warning(f"Could not store match (Matches table may not exist yet): {e}")
+
+    logger.info(f"Aggregation complete. Score: {match_result.get('match_score')}% — "
+                f"{match_result.get('recommendation')}")
 
     return {
+        "match_id": match_id,
+        "candidate_id": candidate_id,
         "job_id": job_id,
+        "match_score": match_result.get("match_score", 0),
+        "recommendation": match_result.get("recommendation", ""),
+        "overall_recommendation": gap_analysis.get("overall_recommendation", ""),
         "status": "completed",
-        "summary": summary,
-        "full_analysis": {
-            "parsed_job": event.get("parsed_job", {}),
-            "skills_analysis": event.get("skills_analysis", {}),
-            "salary_data": event.get("salary_data", {}),
-            "difficulty_score": event.get("difficulty_score", {}),
-            "skills_gap": event.get("skills_gap", {}),
-        },
-        "stored_in_db": stored,
+        "created_at": now,
     }

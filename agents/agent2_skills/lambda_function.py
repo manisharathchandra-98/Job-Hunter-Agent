@@ -1,6 +1,6 @@
 """
-Agent 2: Skill Level Estimator
-Classifies each skill by level, category, and market demand.
+Agent 2: Skills Extractor
+Extracts all skills from resume with proficiency levels using Claude via Bedrock.
 """
 import json
 import logging
@@ -14,32 +14,41 @@ logger.setLevel(logging.INFO)
 bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
 
-PROMPT = """You are a senior technical recruiter.
-Classify each skill for the role described below.
+PROMPT = """You are a senior technical recruiter and skills assessment expert.
+Extract ALL skills from the resume below with proficiency assessment.
 
-Return ONLY a JSON array:
-[
-  {{
-    "name": "skill name",
-    "level": "junior | mid | senior | expert",
-    "category": "language | framework | cloud | devops | database | soft | domain | tool",
-    "years_required": number or null,
-    "market_demand": "low | medium | high | very_high",
-    "is_primary": true or false
-  }}
-]
+Return ONLY valid JSON with this exact schema:
+{{
+  "skills": [
+    {{
+      "name": "string (concise skill name e.g. Python, AWS, Docker)",
+      "level": "junior | mid | senior | expert",
+      "years": number or null,
+      "category": "language | framework | cloud | devops | database | soft | domain | tool",
+      "context": "brief description of how this skill was used",
+      "is_primary": true or false
+    }}
+  ],
+  "primary_stack": ["top 3-5 most important skills for this candidate"],
+  "total_skills_count": number
+}}
 
-Job Context:
-- Title: {job_title}
-- Seniority: {seniority}
-- Experience Required: {years_exp} years
-- Required Skills: {required_skills}
-- Nice-to-Have: {nice_to_have}
-- Responsibilities: {responsibilities}
+Rules:
+- level = candidate's current proficiency (not what a job requires)
+- is_primary = true if this is a core/featured skill
+- Extract EVERY technical and soft skill mentioned explicitly or implied
+- Infer years from work history duration if not explicitly stated
+- category must be one of the listed values
+
+Resume:
+{resume_text}
+
+Work History Context:
+{work_history}
 """
 
 
-def call_bedrock(prompt: str) -> list:
+def call_bedrock(prompt: str) -> dict:
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 3000,
@@ -54,48 +63,30 @@ def call_bedrock(prompt: str) -> list:
 
 
 def lambda_handler(event: dict, context) -> dict:
-    logger.info("Agent 2 — Skill Estimator invoked")
-    parsed = event.get("parsed_job", {})
-    if not parsed:
-        raise ValueError("'parsed_job' missing. Agent 1 must run first.")
+    logger.info("Agent 2 — Skills Extractor invoked")
 
-    years_min = parsed.get("years_experience_min") or 0
-    years_max = parsed.get("years_experience_max") or years_min
-    years_exp = f"{years_min}–{years_max}" if years_max else str(years_min or "not specified")
+    resume_text = event.get("resume_text", "").strip()
+    if not resume_text:
+        raise ValueError("'resume_text' is required.")
 
-    prompt = PROMPT.format(
-        job_title=parsed.get("job_title", "Unknown"),
-        seniority=parsed.get("seniority_level", "unknown"),
-        years_exp=years_exp,
-        required_skills=", ".join(parsed.get("required_skills", [])) or "not listed",
-        nice_to_have=", ".join(parsed.get("nice_to_have_skills", [])) or "none",
-        responsibilities="; ".join(parsed.get("key_responsibilities", [])[:5]) or "not listed",
-    )
+    parsed_resume = event.get("parsed_resume", {})
+    work_history = json.dumps(parsed_resume.get("work_history", []), indent=2)
 
-    skills = call_bedrock(prompt)
+    extracted = call_bedrock(PROMPT.format(
+        resume_text=resume_text,
+        work_history=work_history
+    ))
 
-    # Validate each skill
-    valid_levels = {"junior", "mid", "senior", "expert"}
-    valid_cats = {"language", "framework", "cloud", "devops", "database", "soft", "domain", "tool"}
-    for s in skills:
-        if s.get("level") not in valid_levels:
-            s["level"] = "mid"
-        if s.get("category") not in valid_cats:
-            s["category"] = "tool"
-        s["is_primary"] = bool(s.get("is_primary", False))
+    skills = extracted.get("skills", [])
+    if not isinstance(skills, list):
+        skills = []
+        extracted["skills"] = skills
 
-    primary_count = sum(1 for s in skills if s["is_primary"])
-    high_demand = sum(1 for s in skills if s.get("market_demand") in {"high", "very_high"})
-
-    logger.info(f"Skills: total={len(skills)}, primary={primary_count}, high_demand={high_demand}")
+    logger.info(f"Extracted {len(skills)} skills. "
+                f"Primary stack: {extracted.get('primary_stack', [])}")
 
     return {
         **event,
-        "skills_analysis": {
-            "skills": skills,
-            "total_skills": len(skills),
-            "primary_skills_count": primary_count,
-            "high_demand_skills_count": high_demand,
-        },
-        "status": "skills_estimated",
+        "extracted_skills": extracted,
+        "status": "skills_extracted",
     }

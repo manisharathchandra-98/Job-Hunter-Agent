@@ -1,13 +1,12 @@
 """
-Agent 1: Job Requirements Parser
-Extracts structured data from raw job descriptions using Claude via Bedrock.
+Agent 1: Resume Parser
+Extracts structured candidate information from resume text using Claude via Bedrock.
 """
 import json
 import logging
 import os
 import re
 import boto3
-from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -15,32 +14,39 @@ logger.setLevel(logging.INFO)
 bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
 
-PROMPT = """You are an expert job description analyzer.
-Extract structured data from the job posting below.
+PROMPT = """You are an expert resume parser and HR specialist.
+Extract structured information from the resume below.
 
 Return ONLY valid JSON with this exact schema:
 {{
-  "job_title": "string",
-  "company_name": "string or null",
+  "name": "string or null",
+  "email": "string or null",
+  "phone": "string or null",
+  "current_role": "string or null",
+  "years_experience": number or null,
   "location": "string or null",
-  "employment_type": "full-time | part-time | contract | unknown",
-  "key_responsibilities": ["string"],
-  "required_skills": ["string"],
-  "nice_to_have_skills": ["string"],
-  "years_experience_min": number or null,
-  "years_experience_max": number or null,
-  "education_required": "string or null",
-  "industry": "string",
-  "seniority_level": "junior | mid | senior | lead | executive | unknown"
+  "education": ["string"],
+  "certifications": ["string"],
+  "work_history": [
+    {{
+      "company": "string",
+      "role": "string",
+      "duration": "string",
+      "years": number or null
+    }}
+  ],
+  "summary": "2-3 sentence summary of the candidate profile"
 }}
 
 Rules:
-- Extract ALL skills mentioned (explicit and implied)
-- Use null for missing fields, not empty strings
-- Infer seniority from title and experience if not stated
+- years_experience = total professional experience in years (number only)
+- If a field is missing use null, never empty string
+- education = list of degrees e.g. "BS Computer Science, MIT"
+- certifications = professional certs e.g. "AWS Solutions Architect"
+- work_history = most recent 5 roles maximum
 
-Job Posting:
-{job_text}
+Resume:
+{resume_text}
 """
 
 
@@ -53,38 +59,38 @@ def call_bedrock(prompt: str) -> dict:
     })
     resp = bedrock.invoke_model(modelId=MODEL_ID, body=body)
     content = json.loads(resp["body"].read())["content"][0]["text"].strip()
-    # Strip markdown fences if present
     content = re.sub(r"^```(?:json)?\n?", "", content)
     content = re.sub(r"\n?```$", "", content)
     return json.loads(content)
 
 
 def lambda_handler(event: dict, context) -> dict:
-    logger.info("Agent 1 — Job Parser invoked")
+    logger.info("Agent 1 — Resume Parser invoked")
 
-    job_text = event.get("job_description", "").strip()
-    if not job_text:
-        raise ValueError("'job_description' is required and cannot be empty.")
+    resume_text = event.get("resume_text", "").strip()
+    if not resume_text:
+        raise ValueError("'resume_text' is required and cannot be empty.")
 
-    job_text = job_text[:15000]  # Hard cap for token safety
-    job_id = event.get("job_id", getattr(context, "aws_request_id", "local"))
+    resume_text = resume_text[:15000]
+    match_id = event.get("match_id", getattr(context, "aws_request_id", "local"))
+    candidate_id = event.get("candidate_id", match_id)
 
-    parsed = call_bedrock(PROMPT.format(job_text=job_text))
+    parsed_resume = call_bedrock(PROMPT.format(resume_text=resume_text))
 
-    # Sanitize list fields
-    for f in ["required_skills", "nice_to_have_skills", "key_responsibilities"]:
-        if not isinstance(parsed.get(f), list):
-            parsed[f] = []
+    for f in ["education", "certifications", "work_history"]:
+        if not isinstance(parsed_resume.get(f), list):
+            parsed_resume[f] = []
 
-    logger.info(
-        f"Parsed: title={parsed.get('job_title')}, "
-        f"skills={len(parsed.get('required_skills', []))}, "
-        f"seniority={parsed.get('seniority_level')}"
-    )
+    logger.info(f"Parsed: name={parsed_resume.get('name')}, "
+                f"years={parsed_resume.get('years_experience')}, "
+                f"role={parsed_resume.get('current_role')}")
 
     return {
-        "job_id": job_id,
-        "job_description": job_text,
-        "parsed_job": parsed,
+        "match_id": match_id,
+        "candidate_id": candidate_id,
+        "resume_text": resume_text,
+        "job_description": event.get("job_description", ""),
+        "job_id": event.get("job_id", ""),
+        "parsed_resume": parsed_resume,
         "status": "parsed",
     }

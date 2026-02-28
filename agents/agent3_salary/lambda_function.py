@@ -1,14 +1,13 @@
 """
-Agent 3: Market Salary Analyzer
-Queries DynamoDB for salary benchmarks and uses Claude for range estimates.
+Agent 3: Candidate Market Analyzer
+Analyzes candidate's market value and earning potential using Claude via Bedrock.
 """
 import json
 import logging
 import os
 import re
-from decimal import Decimal
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -16,90 +15,53 @@ logger.setLevel(logging.INFO)
 bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
-
 SALARY_TABLE = os.environ.get("SALARY_TABLE_NAME", "SalaryData")
 
-PROMPT = """You are a compensation analyst specializing in tech roles.
+PROMPT = """You are a compensation expert and talent market analyst.
+Based on this candidate's profile, estimate their market value.
+
+Candidate Profile:
+- Name: {name}
+- Current Role: {current_role}
+- Years of Experience: {years_experience}
+- Education: {education}
+- Certifications: {certifications}
+- Primary Skills: {primary_stack}
+- All Skills: {skills_summary}
+
+Salary Benchmark Data:
+{salary_data}
 
 Return ONLY valid JSON:
 {{
   "salary_low": number,
   "salary_median": number,
   "salary_high": number,
-  "percentile_25": number,
-  "percentile_75": number,
-  "currency": "USD",
-  "confidence": "low | medium | high",
-  "market_insights": "2–3 sentence summary",
-  "factors": ["key factors affecting this range"],
-  "remote_premium_pct": number
+  "market_position": "Entry | Mid | Senior | Lead | Principal",
+  "market_demand": "Low | Medium | High | Very High",
+  "earning_potential_6months": number,
+  "best_suited_roles": ["string"],
+  "market_insight": "2-3 sentence market commentary"
 }}
-
-Job Details:
-- Title: {job_title}
-- Seniority: {seniority}
-- Location: {location}
-- Primary Skills: {primary_skills}
-- Experience Required: {years_exp}
-
-Market Reference Data:
-{market_data}
 """
 
 
-def query_salary(job_title: str, seniority: str) -> list:
-    table = dynamodb.Table(SALARY_TABLE)
-    keyword = next(
-        (w for w in job_title.lower().split()
-         if w in {"engineer", "developer", "analyst", "architect", "scientist", "manager", "lead"}),
-        None
-    )
-    results = []
-    if keyword:
-        try:
-            resp = table.query(
-                IndexName="TitleIndex",
-                KeyConditionExpression=Key("job_title_lower").eq(keyword) & Key("level").eq(seniority),
-                Limit=5,
-            )
-            results = resp.get("Items", [])
-        except Exception as e:
-            logger.warning(f"DynamoDB query error: {e}")
-
-    if not results:
-        try:
-            resp = table.scan(
-                FilterExpression=Attr("level").eq(seniority),
-                Limit=8,
-            )
-            results = resp.get("Items", [])
-        except Exception as e:
-            logger.warning(f"DynamoDB scan error: {e}")
-
-    return results
-
-
-def format_market_data(items: list) -> str:
-    if not items:
-        return "No exact DB match; use general industry knowledge."
-    lines = []
-    for i in items[:5]:
-        low = float(i.get("salary_low", 0))
-        high = float(i.get("salary_high", 0))
-        med = float(i.get("salary_median", 0))
-        lines.append(
-            f"- {i.get('job_title','N/A')} ({i.get('level','N/A')}) "
-            f"in {i.get('location','US')}: ${low:,.0f}–${high:,.0f} (median ${med:,.0f})"
-        )
-    return "\n".join(lines)
+def get_salary_benchmarks() -> list:
+    try:
+        table = dynamodb.Table(SALARY_TABLE)
+        result = table.scan(Limit=15)
+        return result.get("Items", [])
+    except ClientError as e:
+        logger.warning(f"Could not fetch salary data: {e}")
+        return []
 
 
 def call_bedrock(prompt: str) -> dict:
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1024,
+        "max_tokens": 1500,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1,
+        "temperature": 0.2,
     })
     resp = bedrock.invoke_model(modelId=MODEL_ID, body=body)
     content = json.loads(resp["body"].read())["content"][0]["text"].strip()
@@ -109,40 +71,35 @@ def call_bedrock(prompt: str) -> dict:
 
 
 def lambda_handler(event: dict, context) -> dict:
-    logger.info("Agent 3 — Salary Analyzer invoked")
-    parsed = event.get("parsed_job", {})
-    skills_analysis = event.get("skills_analysis", {})
-    if not parsed:
-        raise ValueError("'parsed_job' missing.")
+    logger.info("Agent 3 — Candidate Market Analyzer invoked")
 
-    job_title = parsed.get("job_title", "Software Engineer")
-    seniority = parsed.get("seniority_level", "mid")
-    location = parsed.get("location", "United States")
+    parsed_resume = event.get("parsed_resume", {})
+    extracted_skills = event.get("extracted_skills", {})
+    skills = extracted_skills.get("skills", [])
+    primary_stack = extracted_skills.get("primary_stack", [])
 
-    skills = skills_analysis.get("skills", [])
-    primary_skills = [s["name"] for s in skills if s.get("is_primary")][:6]
-    if not primary_skills:
-        primary_skills = parsed.get("required_skills", [])[:6]
+    salary_data = get_salary_benchmarks()
+    skills_summary = ", ".join([
+        f"{s['name']} ({s.get('level', 'unknown')})"
+        for s in skills[:15]
+    ])
 
-    years_min = parsed.get("years_experience_min")
-    years_max = parsed.get("years_experience_max")
-    years_exp = f"{years_min}–{years_max}" if (years_min and years_max) else str(years_min or "N/A")
-
-    db_items = query_salary(job_title, seniority)
-    market_data = format_market_data(db_items)
-
-    salary = call_bedrock(PROMPT.format(
-        job_title=job_title,
-        seniority=seniority,
-        location=location,
-        primary_skills=", ".join(primary_skills),
-        years_exp=years_exp,
-        market_data=market_data,
+    market_analysis = call_bedrock(PROMPT.format(
+        name=parsed_resume.get("name", "Candidate"),
+        current_role=parsed_resume.get("current_role", "Unknown"),
+        years_experience=parsed_resume.get("years_experience", 0),
+        education=", ".join(parsed_resume.get("education", [])) or "Not specified",
+        certifications=", ".join(parsed_resume.get("certifications", [])) or "None",
+        primary_stack=", ".join(primary_stack) or "Not specified",
+        skills_summary=skills_summary or "Not specified",
+        salary_data=json.dumps(salary_data[:5], default=str)
     ))
 
-    logger.info(
-        f"Salary: ${salary.get('salary_low'):,}–${salary.get('salary_high'):,} "
-        f"(confidence: {salary.get('confidence')})"
-    )
+    logger.info(f"Market value: ${market_analysis.get('salary_median')} median, "
+                f"position: {market_analysis.get('market_position')}")
 
-    return {**event, "salary_data": salary, "status": "salary_analyzed"}
+    return {
+        **event,
+        "market_analysis": market_analysis,
+        "status": "market_analyzed",
+    }
