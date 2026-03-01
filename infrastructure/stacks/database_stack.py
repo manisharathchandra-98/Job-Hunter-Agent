@@ -1,3 +1,5 @@
+# database_stack.py
+
 from aws_cdk import (
     Stack, RemovalPolicy, Duration,
     aws_dynamodb as dynamodb,
@@ -45,6 +47,31 @@ class DatabaseStack(Stack):
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        # ── NEW: Matches table ────────────────────────────────────────────────
+        self.matches_table = dynamodb.Table(
+            self, "MatchesTable",
+            table_name="Matches",
+            partition_key=dynamodb.Attribute(
+                name="match_id",
+                type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        # GSI: query all matches for a given candidate, sorted by date
+        self.matches_table.add_global_secondary_index(
+            index_name="CandidateMatchesIndex",
+            partition_key=dynamodb.Attribute(
+                name="candidate_id",
+                type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="created_at",
+                type=dynamodb.AttributeType.STRING
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
         )
 
         self.skills_table = dynamodb.Table(

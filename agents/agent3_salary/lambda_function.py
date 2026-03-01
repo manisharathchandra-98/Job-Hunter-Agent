@@ -37,8 +37,8 @@ Return ONLY valid JSON:
   "salary_low": number,
   "salary_median": number,
   "salary_high": number,
-  "market_position": "Entry | Mid | Senior | Lead | Principal",
-  "market_demand": "Low | Medium | High | Very High",
+  "market_position": "entry | mid | senior | lead | principal",
+  "market_demand": "low | medium | high | very_high",
   "earning_potential_6months": number,
   "best_suited_roles": ["string"],
   "market_insight": "2-3 sentence market commentary"

@@ -20,12 +20,13 @@ class MainStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         common_env = {
-            "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
-            "JOBS_TABLE_NAME": db_stack.jobs_table.table_name,
+            "BEDROCK_MODEL_ID":      BEDROCK_MODEL_ID,
+            "JOBS_TABLE_NAME":       db_stack.jobs_table.table_name,
             "CANDIDATES_TABLE_NAME": db_stack.candidates_table.table_name,
-            "SKILLS_TABLE_NAME": db_stack.skills_table.table_name,
-            "SALARY_TABLE_NAME": db_stack.salary_table.table_name,
-            "LOG_LEVEL": "INFO",
+            "SKILLS_TABLE_NAME":     db_stack.skills_table.table_name,
+            "SALARY_TABLE_NAME":     db_stack.salary_table.table_name,
+            "MATCHES_TABLE_NAME":    db_stack.matches_table.table_name,  # NEW
+            "LOG_LEVEL":             "INFO",
         }
 
         def make_lambda(name: str, code_path: str,
@@ -49,7 +50,6 @@ class MainStack(Stack):
                     removal_policy=RemovalPolicy.DESTROY,
                 ),
             )
-            # Attach AWS managed Bedrock policy directly
             fn.role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name(
                     "AmazonBedrockFullAccess"
@@ -57,18 +57,21 @@ class MainStack(Stack):
             )
             return fn
 
-        # ── Lambda Functions ──────────────────────────────────────────
-        agent1 = make_lambda("agent-parser", "../agents/agent1_parser", timeout=60)
-        agent2 = make_lambda("agent-skills", "../agents/agent2_skills", timeout=90)
-        agent3 = make_lambda("agent-salary", "../agents/agent3_salary", timeout=60)
-        agent4 = make_lambda("agent-difficulty", "../agents/agent4_difficulty", timeout=60)
-        agent5 = make_lambda("agent-gaps", "../agents/agent5_gaps", timeout=90, memory=512)
-        aggregator = make_lambda("agent-aggregator", "../agents/aggregator", timeout=30)
+        # ── Lambda Functions ──────────────────────────────────────────────────
+        agent1     = make_lambda("agent-parser",     "../agents/agent1_parser",     timeout=60)
+        agent2     = make_lambda("agent-skills",     "../agents/agent2_skills",     timeout=90)
+        agent3     = make_lambda("agent-salary",     "../agents/agent3_salary",     timeout=60)
+        agent4     = make_lambda("agent-difficulty", "../agents/agent4_difficulty", timeout=60)
+        agent5     = make_lambda("agent-gaps",       "../agents/agent5_gaps",       timeout=90, memory=512)
+        aggregator = make_lambda("agent-aggregator", "../agents/aggregator",        timeout=30)
 
+        # ── DynamoDB permissions ──────────────────────────────────────────────
         db_stack.salary_table.grant_read_data(agent3)
         db_stack.jobs_table.grant_write_data(aggregator)
+        db_stack.candidates_table.grant_write_data(aggregator)   # NEW
+        db_stack.matches_table.grant_write_data(aggregator)      # NEW
 
-        # ── Step Functions ────────────────────────────────────────────
+        # ── Step Functions ────────────────────────────────────────────────────
         parse_job = tasks.LambdaInvoke(
             self, "ParseJob",
             lambda_function=agent1,
@@ -133,20 +136,28 @@ class MainStack(Stack):
             handler="lambda_proxy.lambda_handler",
             extra_env={"STATE_MACHINE_ARN": state_machine.state_machine_arn},
         )
+
+        # ── API proxy permissions ─────────────────────────────────────────────
         db_stack.jobs_table.grant_read_write_data(api_proxy)
         db_stack.candidates_table.grant_read_write_data(api_proxy)
+        db_stack.matches_table.grant_read_data(api_proxy)        # NEW
+
         api_proxy.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["states:StartExecution", "states:DescribeExecution"],
+                actions=[
+                    "states:StartExecution",
+                    "states:DescribeExecution",
+                    "states:ListExecutions",    # NEW
+                ],
                 resources=[state_machine.state_machine_arn],
             )
         )
 
-        # ── API Gateway ───────────────────────────────────────────────
+        # ── API Gateway ───────────────────────────────────────────────────────
         api = apigw.RestApi(
             self, "JobAnalyzerApi",
             rest_api_name="JobAnalyzerAPI",
-            description="Job Description Analyzer REST API",
+            description="Job Fit Analyzer REST API",
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=apigw.Cors.ALL_ORIGINS,
                 allow_methods=apigw.Cors.ALL_METHODS,
@@ -157,12 +168,30 @@ class MainStack(Stack):
 
         proxy_integration = apigw.LambdaIntegration(api_proxy, proxy=True)
 
+        # /jobs
         jobs = api.root.add_resource("jobs")
         jobs.add_method("POST", proxy_integration)
-        jobs.add_method("GET", proxy_integration)
-
+        jobs.add_method("GET",  proxy_integration)
         job_item = jobs.add_resource("{job_id}")
         job_item.add_method("GET", proxy_integration)
 
+        # NEW: /match  (trigger full resume+job pipeline)
+        match_root = api.root.add_resource("match")
+        match_root.add_method("POST", proxy_integration)
+
+        # NEW: /matches/{match_id}
+        matches = api.root.add_resource("matches")
+        match_item = matches.add_resource("{match_id}")
+        match_item.add_method("GET", proxy_integration)
+
+        # /candidates
         candidates = api.root.add_resource("candidates")
         candidates.add_method("POST", proxy_integration)
+
+        # NEW: /candidates/{candidate_id}
+        candidate_item = candidates.add_resource("{candidate_id}")
+        candidate_item.add_method("GET", proxy_integration)
+
+        # NEW: /candidates/{candidate_id}/matches
+        candidate_matches = candidate_item.add_resource("matches")
+        candidate_matches.add_method("GET", proxy_integration)
