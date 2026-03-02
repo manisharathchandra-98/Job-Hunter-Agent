@@ -143,15 +143,7 @@ jobs:
             --function-name job-analyzer-agent-resume-coach \
             --zip-file fileb:///tmp/resume_coach.zip
           # Update env vars to activate RAG
-          aws lambda update-function-configuration \
-  --function-name job-analyzer-agent-resume-coach \
-  --environment "Variables={\
-    MATCHES_TABLE_NAME=Matches,\
-    BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0,\
-    RAG_INDEX_BUCKET=${{ secrets.RAG_INDEX_BUCKET }},\
-    RAG_INDEX_KEY=rag/career_index.json,\
-    USE_RAG=true\
-  }"
+          aws lambda update-function-configuration --function-name job-analyzer-agent-resume-coach --environment "Variables={MATCHES_TABLE_NAME=Matches,BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0,RAG_INDEX_BUCKET=${{ secrets.RAG_INDEX_BUCKET }},RAG_INDEX_KEY=rag/career_index.json,USE_RAG=true}"
           echo "✅ Resume Coach deployed with RAG"
 
   # ── Job 5: Deploy Lambda — API Proxy ────────────────────────────────────
