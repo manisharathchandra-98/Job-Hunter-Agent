@@ -4,8 +4,6 @@ Extracts structured candidate information from resume text using Claude via Bedr
 """
 import json
 import logging
-import os
-import re
 import boto3
 
 logger = logging.getLogger()
@@ -42,8 +40,9 @@ Rules:
 - years_experience = total professional experience in years (number only)
 - If a field is missing use null, never empty string
 - education = list of degrees e.g. "BS Computer Science, MIT"
-- certifications = professional certs e.g. "AWS Solutions Architect"
-- work_history = most recent 5 roles maximum
+- certifications = professional certs only, keep list short (max 5)
+- work_history = most recent 3 roles maximum (keep response concise)
+- summary = keep to 2 sentences maximum
 
 Resume:
 {resume_text}
@@ -53,15 +52,49 @@ Resume:
 def call_bedrock(prompt: str) -> dict:
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
     })
-    resp = bedrock.invoke_model(modelId=MODEL_ID, body=body)
+    resp = bedrock.invoke_model(
+        modelId=MODEL_ID, body=body,
+        contentType="application/json", accept="application/json"
+    )
     content = json.loads(resp["body"].read())["content"][0]["text"].strip()
-    content = re.sub(r"^```(?:json)?\n?", "", content)
-    content = re.sub(r"\n?```$", "", content)
-    return json.loads(content)
+
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        lines = content.splitlines()
+        # Remove first line (```json or ```) and last line (```)
+        inner = lines[1:] if len(lines) > 1 else lines
+        if inner and inner[-1].strip() == "```":
+            inner = inner[:-1]
+        content = "\n".join(inner).strip()
+
+    # Attempt direct parse
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    # Repair truncated JSON — walk back to last clean delimiter
+    logger.warning("JSON truncated — attempting repair")
+    try:
+        repaired = content
+        # Walk backwards to find the last clean comma or opening brace/bracket
+        for i in range(len(repaired) - 1, 0, -1):
+            if repaired[i] in (',', '{', '['):
+                repaired = repaired[:i]
+                break
+        # Close any unclosed arrays and objects
+        open_brackets = repaired.count('[') - repaired.count(']')
+        open_braces   = repaired.count('{') - repaired.count('}')
+        repaired += ']' * max(open_brackets, 0)
+        repaired += '}' * max(open_braces, 0)
+        return json.loads(repaired)
+    except Exception as e:
+        logger.error(f"JSON repair failed: {e} | Raw content[:300]: {content[:300]}")
+        raise ValueError(f"Bedrock returned malformed JSON: {e}")
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -71,8 +104,10 @@ def lambda_handler(event: dict, context) -> dict:
     if not resume_text:
         raise ValueError("'resume_text' is required and cannot be empty.")
 
-    resume_text = resume_text[:15000]
-    match_id = event.get("match_id", getattr(context, "aws_request_id", "local"))
+    # Truncate to 5000 chars — keeps Bedrock output well within 4096 token limit
+    resume_text = resume_text[:5000]
+
+    match_id     = event.get("match_id",     getattr(context, "aws_request_id", "local"))
     candidate_id = event.get("candidate_id", match_id)
 
     parsed_resume = call_bedrock(PROMPT.format(resume_text=resume_text))
@@ -86,11 +121,11 @@ def lambda_handler(event: dict, context) -> dict:
                 f"role={parsed_resume.get('current_role')}")
 
     return {
-        "match_id": match_id,
-        "candidate_id": candidate_id,
-        "resume_text": resume_text,
+        "match_id":        match_id,
+        "candidate_id":    candidate_id,
+        "resume_text":     resume_text,
         "job_description": event.get("job_description", ""),
-        "job_id": event.get("job_id", ""),
-        "parsed_resume": parsed_resume,
-        "status": "parsed",
+        "job_id":          event.get("job_id", ""),
+        "parsed_resume":   parsed_resume,
+        "status":          "parsed",
     }

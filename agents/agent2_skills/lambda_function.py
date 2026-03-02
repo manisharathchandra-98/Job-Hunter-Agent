@@ -1,11 +1,9 @@
 """
 Agent 2: Skills Extractor
-Extracts all skills from resume with proficiency levels using Claude via Bedrock.
+Extracts skills from resume with proficiency levels using Claude via Bedrock.
 """
 import json
 import logging
-import os
-import re
 import boto3
 
 logger = logging.getLogger()
@@ -15,7 +13,7 @@ bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
 
 PROMPT = """You are a senior technical recruiter and skills assessment expert.
-Extract ALL skills from the resume below with proficiency assessment.
+Extract the TOP 20 most important skills from the resume below.
 
 Return ONLY valid JSON with this exact schema:
 {{
@@ -25,41 +23,70 @@ Return ONLY valid JSON with this exact schema:
       "level": "junior | mid | senior | expert",
       "years": number or null,
       "category": "language | framework | cloud | devops | database | soft | domain | tool",
-      "context": "brief description of how this skill was used",
       "is_primary": true or false
     }}
   ],
-  "primary_stack": ["top 3-5 most important skills for this candidate"],
+  "primary_stack": ["top 5 most important skills for this candidate"],
   "total_skills_count": number
 }}
 
 Rules:
-- level = candidate's current proficiency (not what a job requires)
-- is_primary = true if this is a core/featured skill
-- Extract EVERY technical and soft skill mentioned explicitly or implied
-- Infer years from work history duration if not explicitly stated
-- category must be one of the listed values
+- Limit to 20 skills maximum — prioritise primary/core skills
+- level = candidate's current proficiency
+- is_primary = true for core/featured skills only (max 8)
+- category must be one of the listed values exactly
+- years = number only, null if unknown
 
-Resume:
+Resume (first 4000 chars):
 {resume_text}
-
-Work History Context:
-{work_history}
 """
 
 
 def call_bedrock(prompt: str) -> dict:
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 3000,
-        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 4096,
         "temperature": 0.1,
+        "messages": [{"role": "user", "content": prompt}],
     })
-    resp = bedrock.invoke_model(modelId=MODEL_ID, body=body)
+    resp = bedrock.invoke_model(
+        modelId=MODEL_ID, body=body,
+        contentType="application/json", accept="application/json"
+    )
     content = json.loads(resp["body"].read())["content"][0]["text"].strip()
-    content = re.sub(r"^```(?:json)?\n?", "", content)
-    content = re.sub(r"\n?```$", "", content)
-    return json.loads(content)
+
+    # Strip markdown code fences
+    if content.startswith("```"):
+        lines = content.splitlines()
+        inner = lines[1:] if len(lines) > 1 else lines
+        if inner and inner[-1].strip() == "```":
+            inner = inner[:-1]
+        content = "\n".join(inner).strip()
+
+    # Attempt direct parse
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    # Repair truncated JSON
+    logger.warning("JSON truncated — attempting repair")
+    try:
+        repaired = content
+        # Walk back to last clean delimiter
+        for i in range(len(repaired) - 1, 0, -1):
+            if repaired[i] in (',', '{', '['):
+                repaired = repaired[:i]
+                break
+        # ✅ Count AFTER trimming
+        open_brackets = repaired.count('[') - repaired.count(']')
+        open_braces   = repaired.count('{') - repaired.count('}')
+        repaired += ']' * max(open_brackets, 0)
+        repaired += '}' * max(open_braces, 0)
+        return json.loads(repaired)
+    except Exception as e:
+        logger.error(f"JSON repair failed: {e} | content[:300]: {content[:300]}")
+        raise ValueError(f"Bedrock returned malformed JSON: {e}")
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -69,12 +96,12 @@ def lambda_handler(event: dict, context) -> dict:
     if not resume_text:
         raise ValueError("'resume_text' is required.")
 
-    parsed_resume = event.get("parsed_resume", {})
-    work_history = json.dumps(parsed_resume.get("work_history", []), indent=2)
+    # ✅ Truncate — keeps prompt + output within Bedrock's 4096 token limit
+    resume_text_trimmed = resume_text[:4000]
 
+    # ✅ Removed work_history from prompt — reduces input size significantly
     extracted = call_bedrock(PROMPT.format(
-        resume_text=resume_text,
-        work_history=work_history
+        resume_text=resume_text_trimmed,
     ))
 
     skills = extracted.get("skills", [])

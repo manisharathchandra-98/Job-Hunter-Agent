@@ -1,246 +1,213 @@
 """
-Agent 6 — Resume Coach
-Generates specific, copy-paste-ready resume improvements based on all prior gap analyses.
-Writes resume_suggestions to DynamoDB and flips match status → "completed".
+Agent 6 — Resume Coach with RAG grounding from OpenSearch knowledge base.
 """
-import json
-import logging
 import os
+import json
 import re
 import boto3
-from datetime import datetime, timezone
-from decimal import Decimal
-from botocore.exceptions import ClientError
+import logging
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-bedrock  = boto3.client("bedrock-runtime", region_name="us-east-1")
-dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
-MATCHES_TABLE = os.environ.get("MATCHES_TABLE_NAME", "Matches")
+REGION          = os.environ.get("AWS_REGION", "us-east-1")
+MODEL_ID        = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
+DYNAMO_TABLE = os.environ.get("MATCHES_TABLE_NAME", os.environ.get("DYNAMODB_TABLE", "Matches"))
+USE_RAG         = os.environ.get("USE_RAG", "true").lower() == "true"
 
-# RAG retriever is optional — only active once OpenSearch is set up.
-try:
-    from rag.retriever import retrieve_similar_resumes
-    RAG_ENABLED = True
-except ImportError:
-    RAG_ENABLED = False
-    logger.info("RAG module not available — running without similar-resume examples.")
+bedrock  = boto3.client("bedrock-runtime", region_name=REGION)
+dynamodb = boto3.resource("dynamodb", region_name=REGION)
+table    = dynamodb.Table(DYNAMO_TABLE)
+
+# ── RAG import (optional) ──────────────────────────────────────────────────
+_retriever = None
+if USE_RAG:
+    try:
+        from rag.retriever import retrieve_career_context
+        _retriever = retrieve_career_context
+        logger.info("RAG retriever loaded successfully")
+    except ImportError as e:
+        logger.warning("RAG retriever not available: %s", e)
 
 
-def lambda_handler(event: dict, context) -> dict:
-    logger.info("Resume Coach (Agent 6) — Generating resume improvement suggestions")
-
-    match_id     = event.get("match_id", getattr(context, "aws_request_id", "local"))
-    resume_text     = event.get("resume_text", "")
-    job_description = event.get("job_description", "")
-
-    # Outputs from previous agents (passed via Step Functions ResultPath)
-    skills_result     = event.get("skills_result", {})
-    experience_result = event.get("experience_result", {})
-    culture_result    = event.get("culture_result", {})
-    aggregator_result = event.get("aggregator_result", {})
-
-    # ── Optional RAG: fetch similar high-scoring resumes as examples ──────
-    rag_context = ""
-    if RAG_ENABLED:
-        try:
-            similar = retrieve_similar_resumes(resume_text, top_k=3)
-            rag_context = _format_rag_examples(similar)
-            logger.info(f"RAG: retrieved {len(similar)} similar resume examples")
-        except Exception as e:
-            logger.warning(f"RAG retrieval failed (non-fatal): {e}")
-
-    # ── Call Bedrock ──────────────────────────────────────────────────────
-    prompt = _build_prompt(
-        resume_text, job_description,
-        skills_result, experience_result,
-        culture_result, aggregator_result,
-        rag_context
-    )
+def lambda_handler(event, context):
+    logger.info("Resume Coach event: %s", json.dumps(event)[:500])
 
     try:
-        response = bedrock.invoke_model(
-            modelId=MODEL_ID,
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 4096,
-                "messages": [{"role": "user", "content": prompt}]
-            })
+        # ── Extract inputs ──────────────────────────────────────────
+        resume_text  = event.get("resume_text", "")
+        jd_text      = event.get("jd_text", "")
+        match_id     = event.get("match_id", "")
+        overall_score = event.get("overall_score", 0)
+        skill_gaps   = event.get("skill_gaps", [])
+        job_title    = event.get("job_title", "Software Engineer")
+        required_skills = event.get("required_skills", [])
+
+        if not resume_text or not jd_text or not match_id:
+            raise ValueError("Missing required fields: resume_text, jd_text, match_id")
+
+        # ── RAG: retrieve role-specific context ─────────────────────
+        rag_context = ""
+        if _retriever and required_skills:
+            rag_context = _retriever(job_title, required_skills)
+            if rag_context:
+                logger.info("RAG context retrieved (%d chars)", len(rag_context))
+
+        # ── Build prompt ────────────────────────────────────────────
+        prompt = _build_prompt(
+            resume_text, jd_text, overall_score, skill_gaps, rag_context
         )
-        body     = json.loads(response["body"].read())
-        raw_text = body["content"][0]["text"]
-        result   = _extract_json(raw_text)
-        logger.info("Resume Coach — Bedrock response received and parsed")
+
+        # ── Call Bedrock ────────────────────────────────────────────
+        suggestions = _call_bedrock(prompt)
+
+        # ── Persist to DynamoDB ─────────────────────────────────────
+        _save_suggestions(match_id, suggestions)
+
+        return {
+            "match_id": match_id,
+            "resume_suggestions": suggestions,
+            "rag_used": bool(rag_context),
+            "status": "completed"
+        }
+
     except Exception as e:
-        logger.error(f"Bedrock call failed: {e}")
-        result = {"error": str(e)}
-
-    # ── Persist to DynamoDB + flip status → "completed" ──────────────────
-    now = datetime.now(timezone.utc).isoformat()
-    try:
-        dynamodb.Table(MATCHES_TABLE).update_item(
-            Key={"match_id": match_id},
-            UpdateExpression="""SET
-                resume_suggestions = :rs,
-                #st                = :completed,
-                updated_at         = :ua
-            """,
-            ExpressionAttributeNames={"#st": "status"},
-            ExpressionAttributeValues={
-                ":rs":        _sanitise_for_dynamo(result),
-                ":completed": "completed",
-                ":ua":        now,
-            }
-        )
-        logger.info(f"Match {match_id} → status=completed, resume_suggestions stored")
-    except ClientError as e:
-        logger.error(f"Failed to update DynamoDB with resume suggestions: {e}")
-
-    return {
-        "statusCode":         200,
-        "match_id":           match_id,
-        "resume_suggestions": result,
-    }
+        logger.error("Resume Coach failed: %s", str(e), exc_info=True)
+        _save_error(event.get("match_id", ""), str(e))
+        raise
 
 
-# ── Prompt builder ────────────────────────────────────────────────────────────
+def _build_prompt(resume_text, jd_text, overall_score, skill_gaps, rag_context=""):
+    rag_section = ""
+    if rag_context:
+        rag_section = f"""
+## Career Knowledge Base (Role-Specific Guidance)
+The following expert career guidance is relevant to this role. Use it to make your
+suggestions more specific and grounded:
 
-def _build_prompt(resume, jd, skills, experience, culture, aggregator, rag_context=""):
-    missing_skills = skills.get("missing_skills", [])
-    skills_gaps    = skills.get("gaps", [])
-    exp_gaps       = experience.get("gaps", [])
-    culture_gaps   = culture.get("gaps", [])
-    match_score    = aggregator.get("match_score", "N/A")
-    recommendation = aggregator.get("overall_recommendation", "")
-
-    rag_section = f"""
----
-SIMILAR HIGH-SCORING RESUME EXAMPLES (use as inspiration — do not copy directly):
 {rag_context}
-""" if rag_context else ""
-
-    current_score = match_score if isinstance(match_score, (int, float)) else 0
-
-    return f"""You are a senior resume coach and career strategist.
-
-The candidate's resume scored {match_score}/100 for the job below.
-Your job is to provide specific, copy-paste-ready resume improvements that directly address each identified gap.
 
 ---
-CURRENT RESUME:
-{resume[:3000]}
-
----
-JOB DESCRIPTION:
-{jd[:2000]}
-
----
-GAP ANALYSIS:
-- Missing Technical Skills : {json.dumps(missing_skills)}
-- Skills Gaps              : {json.dumps(skills_gaps)}
-- Experience Gaps          : {json.dumps(exp_gaps)}
-- Culture / Soft Skill Gaps: {json.dumps(culture_gaps)}
-- Overall Recommendation   : {recommendation}
-{rag_section}
----
-Return a JSON object with EXACTLY this structure (no markdown, no explanation outside JSON):
-
-{{
-  "priority_changes": [
-    {{
-      "priority": "HIGH | MEDIUM | LOW",
-      "section": "SUMMARY | SKILLS | EXPERIENCE | EDUCATION | CERTIFICATIONS",
-      "issue": "what gap or weakness this addresses",
-      "action": "ADD | REWRITE | REMOVE | REORDER",
-      "current_text": "exact current text, or null if adding new content",
-      "suggested_text": "exact replacement or new text to add",
-      "reason": "why this change improves the fit score"
-    }}
-  ],
-  "keywords_to_add": [
-    {{
-      "keyword": "exact keyword or phrase from the job description",
-      "frequency_in_jd": "high | medium | low",
-      "suggested_placement": "Skills section / Experience bullet / Summary",
-      "example_usage": "sentence showing natural incorporation"
-    }}
-  ],
-  "bullet_rewrites": [
-    {{
-      "original": "exact original bullet point from resume",
-      "rewritten": "stronger version with action verb, scope, and quantified impact",
-      "improvement_type": "added metric | stronger verb | added relevance | added scope"
-    }}
-  ],
-  "new_bullets_to_add": [
-    {{
-      "target_role_or_project": "which experience entry to add it under",
-      "bullet": "new bullet point that bridges a specific gap",
-      "gap_addressed": "which gap from the analysis this covers"
-    }}
-  ],
-  "summary_rewrite": {{
-    "original": "current summary from resume, or null",
-    "suggested": "optimised 2-3 sentence professional summary for this exact role",
-    "ats_keywords_included": ["keyword1", "keyword2", "keyword3"]
-  }},
-  "skills_section_rewrite": {{
-    "add": ["skill1", "skill2"],
-    "remove": ["irrelevant skill1"],
-    "reorder_advice": "put X, Y first — they match primary JD requirements"
-  }},
-  "estimated_score_after_changes": {{
-    "current_score": {current_score},
-    "projected_score": 0,
-    "improvement_breakdown": {{
-      "keywords": "+X points",
-      "bullet_quality": "+X points",
-      "skills_alignment": "+X points"
-    }}
-  }},
-  "overall_strategy": "3-4 sentence strategic advice for this specific application"
-}}
 """
 
+    gaps_str = "\n".join(f"- {g}" for g in skill_gaps[:10]) if skill_gaps else "- No major gaps identified"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+    return f"""You are an expert resume coach and career advisor with 15+ years of experience
+helping software engineers land senior roles at top tech companies.
 
-def _format_rag_examples(similar_resumes: list) -> str:
-    if not similar_resumes:
-        return ""
-    lines = []
-    for i, r in enumerate(similar_resumes, 1):
-        lines.append(
-            f"Example {i} (Match Score: {r['match_score']}, Role: {r['job_title']}):\n"
-            f"{r.get('bullet_examples', '')}\n"
-        )
-    return "\n".join(lines)
+{rag_section}
+## Current Situation
+Current fit score: {overall_score}/100
+Identified skill gaps:
+{gaps_str}
+
+## Job Description
+{jd_text[:3000]}
+
+## Current Resume
+{resume_text[:4000]}
+
+## Your Task
+Analyze the resume against the job description and provide highly specific, actionable
+improvement suggestions. Be concrete — don't say "add more details", say exactly WHAT to add.
+
+Return ONLY a valid JSON object with exactly these keys:
+
+{{
+  "ScoreProjection": {{
+    "current_score": {overall_score},
+    "projected_score": <number 0-100>,
+    "improvement_delta": <projected - current>,
+    "confidence": "High|Medium|Low"
+  }},
+  "PriorityChanges": [
+    {{"rank": 1, "change": "<specific change>", "impact": "High|Medium|Low", "effort": "Low|Medium|High"}},
+    {{"rank": 2, "change": "<specific change>", "impact": "High|Medium|Low", "effort": "Low|Medium|High"}},
+    {{"rank": 3, "change": "<specific change>", "impact": "High|Medium|Low", "effort": "Low|Medium|High"}}
+  ],
+  "KeywordsToAdd": [
+    {{"keyword": "<exact keyword from JD>", "context": "<where to add it in resume>"}},
+    ...
+  ],
+  "BulletRewrites": [
+    {{"original": "<existing bullet>", "improved": "<rewritten bullet with metrics>", "reason": "<why this is better>"}},
+    ...
+  ],
+  "NewBullets": [
+    "<new bullet point to add based on gaps>",
+    ...
+  ],
+  "SummaryRewrite": "<full rewritten professional summary tailored to this JD>",
+  "SkillsSectionRewrite": "<full rewritten skills section with missing keywords added>",
+  "OverallStrategy": "<2-3 sentences of high-level positioning advice>"
+}}
+
+Return ONLY the JSON, no markdown, no explanation."""
 
 
-def _extract_json(text: str) -> dict:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+def _call_bedrock(prompt: str) -> dict:
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            try:
-                return json.loads(match.group())
-            except Exception:
-                pass
-    return {"error": "Failed to parse agent response", "raw": text[:500]}
+        response = bedrock.converse(
+            modelId=MODEL_ID,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"temperature": 0.3, "maxTokens": 3000}
+        )
+        raw = response["output"]["message"]["content"][0]["text"].strip()
+        logger.info("Bedrock response length: %d chars", len(raw))
+
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+
+        return json.loads(raw)
+
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse Bedrock JSON: %s", str(e))
+        return {"error": f"JSON parse error: {str(e)}", "raw": raw[:500]}
+    except Exception as e:
+        logger.error("Bedrock call failed: %s", str(e))
+        return {"error": str(e)}
 
 
 def _sanitise_for_dynamo(obj):
-    """Recursively convert floats → Decimal and strip empty strings for DynamoDB."""
-    if isinstance(obj, float):
-        return Decimal(str(obj))
-    elif isinstance(obj, dict):
-        return {k: _sanitise_for_dynamo(v) for k, v in obj.items() if v != ""}
-    elif isinstance(obj, list):
+    if isinstance(obj, dict):
+        return {k: _sanitise_for_dynamo(v) for k, v in obj.items()}
+    if isinstance(obj, list):
         return [_sanitise_for_dynamo(i) for i in obj]
+    if isinstance(obj, set):
+        return [_sanitise_for_dynamo(i) for i in obj]
+    if obj is None:
+        return ""
     return obj
+
+
+def _save_suggestions(match_id: str, suggestions: dict):
+    table.update_item(
+        Key={"match_id": match_id},
+        UpdateExpression="SET resume_suggestions = :s, #st = :c, rag_enabled = :r",
+        ExpressionAttributeNames={"#st": "status"},
+        ExpressionAttributeValues={
+            ":s": _sanitise_for_dynamo(suggestions),
+            ":c": "completed",
+            ":r": bool(_retriever)
+        }
+    )
+    logger.info("Saved suggestions for match_id: %s", match_id)
+
+
+def _save_error(match_id: str, error_msg: str):
+    if not match_id:
+        return
+    try:
+        table.update_item(
+            Key={"match_id": match_id},
+            UpdateExpression="SET resume_suggestions = :s, #st = :c",
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={
+                ":s": {"error": error_msg},
+                ":c": "failed"
+            }
+        )
+    except Exception:
+        pass
