@@ -40,13 +40,13 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     outputs:
-      aggregator:    ${{ steps.filter.outputs.aggregator }}
-      resume_coach:  ${{ steps.filter.outputs.resume_coach }}
-      lambda_proxy:  ${{ steps.filter.outputs.lambda_proxy }}
-      frontend:      ${{ steps.filter.outputs.frontend }}
-      stepfunctions: ${{ steps.filter.outputs.stepfunctions }}
+      aggregator:     ${{ steps.filter.outputs.aggregator }}
+      resume_coach:   ${{ steps.filter.outputs.resume_coach }}
+      lambda_proxy:   ${{ steps.filter.outputs.lambda_proxy }}
+      frontend:       ${{ steps.filter.outputs.frontend }}
+      stepfunctions:  ${{ steps.filter.outputs.stepfunctions }}
       infrastructure: ${{ steps.filter.outputs.infrastructure }}
-      rag:           ${{ steps.filter.outputs.rag }}
+      rag:            ${{ steps.filter.outputs.rag }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -101,7 +101,9 @@ jobs:
           aws lambda update-function-code \
             --function-name job-analyzer-agent-aggregator \
             --zip-file fileb:///tmp/aggregator.zip
-          echo "✅ Aggregator deployed"
+          aws lambda wait function-updated \
+            --function-name job-analyzer-agent-aggregator
+          echo "Aggregator deployed"
 
   # ── Job 4: Deploy Lambda — Resume Coach (with RAG) ──────────────────────
   deploy-resume-coach:
@@ -126,25 +128,22 @@ jobs:
       - name: Package and deploy Resume Coach
         run: |
           mkdir -p /tmp/coach_pkg/rag/knowledge_base
-          # Install RAG dependencies
           pip install opensearch-py requests-aws4auth \
             -t /tmp/coach_pkg/ --quiet
-          # Copy agent code
           cp agents/resume_coach/resume_coach.py /tmp/coach_pkg/
-          # Copy full RAG layer
           cp rag/*.py /tmp/coach_pkg/rag/
           cp rag/knowledge_base/*.py /tmp/coach_pkg/rag/knowledge_base/ 2>/dev/null || true
           touch /tmp/coach_pkg/rag/__init__.py
           touch /tmp/coach_pkg/rag/knowledge_base/__init__.py
-          # Zip and deploy
           cd /tmp/coach_pkg
           zip -r /tmp/resume_coach.zip . -q
           aws lambda update-function-code \
             --function-name job-analyzer-agent-resume-coach \
             --zip-file fileb:///tmp/resume_coach.zip
-          # Update env vars to activate RAG
+          aws lambda wait function-updated \
+            --function-name job-analyzer-agent-resume-coach
           aws lambda update-function-configuration --function-name job-analyzer-agent-resume-coach --environment "Variables={MATCHES_TABLE_NAME=Matches,BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0,RAG_INDEX_BUCKET=${{ secrets.RAG_INDEX_BUCKET }},RAG_INDEX_KEY=rag/career_index.json,USE_RAG=true}"
-          echo "✅ Resume Coach deployed with RAG"
+          echo "Resume Coach deployed with RAG"
 
   # ── Job 5: Deploy Lambda — API Proxy ────────────────────────────────────
   deploy-lambda-proxy:
@@ -168,7 +167,9 @@ jobs:
           aws lambda update-function-code \
             --function-name job-analyzer-api-proxy \
             --zip-file fileb:///tmp/lambda_proxy.zip
-          echo "✅ API Proxy deployed"
+          aws lambda wait function-updated \
+            --function-name job-analyzer-api-proxy
+          echo "API Proxy deployed"
 
   # ── Job 6: Deploy Infrastructure via CDK ────────────────────────────────
   deploy-infrastructure:
@@ -254,13 +255,10 @@ jobs:
 
       - name: Sync build output to S3
         run: |
-          # Sync all assets with long cache (immutable hashed filenames)
           aws s3 sync frontend/dist/ s3://${{ secrets.S3_BUCKET_NAME }}/ \
             --delete \
             --exclude "index.html" \
             --cache-control "public, max-age=31536000, immutable"
-
-          # index.html must never be cached so users always get latest
           aws s3 cp frontend/dist/index.html \
             s3://${{ secrets.S3_BUCKET_NAME }}/index.html \
             --cache-control "no-cache, no-store, must-revalidate"
@@ -270,7 +268,7 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
-          echo "✅ CloudFront cache cleared"
+          echo "CloudFront cache cleared"
 
   # ── Job 8: Update Step Functions ────────────────────────────────────────
   deploy-stepfunctions:
@@ -295,7 +293,7 @@ jobs:
       - name: Update state machine definition
         run: |
           python step_functions/update_sfn.py
-          echo "✅ Step Functions updated"
+          echo "Step Functions updated"
 
   # ── Job 9: Smoke Test ────────────────────────────────────────────────────
   smoke-test:
@@ -308,12 +306,7 @@ jobs:
       - deploy-infrastructure
       - deploy-frontend
       - deploy-stepfunctions
-    # Run even if some deploy jobs were skipped (only fail on real errors)
-    if: |
-      always() &&
-      !cancelled() &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name == 'push'
+    if: always() && !cancelled() && github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
@@ -342,12 +335,11 @@ jobs:
           except Exception as e:
               print(f'Health check warning: {e}')
           "
+
       - name: Deployment summary
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ Deployment pipeline complete"
-          echo "   Commit : ${{ github.sha }}"
-          echo "   Branch : ${{ github.ref_name }}"
-          echo "   Actor  : ${{ github.actor }}"
-          echo "   Time   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Deployment pipeline complete"
+          echo "Commit : ${{ github.sha }}"
+          echo "Branch : ${{ github.ref_name }}"
+          echo "Actor  : ${{ github.actor }}"
+          echo "Time   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
