@@ -1,0 +1,69 @@
+/* frontend/src/components/ErrorBoundary.css */
+.eb-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    padding: 2rem;
+  }
+  
+  .eb-card {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(220, 38, 38, 0.2);
+    border-top: 4px solid #dc2626;
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    max-width: 460px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  }
+  
+  .eb-icon {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+    color: #dc2626;
+  }
+  
+  .eb-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0 0 0.75rem;
+  }
+  
+  .eb-message {
+    font-size: 0.92rem;
+    color: #64748b;
+    margin: 0 0 1.75rem;
+    line-height: 1.6;
+  }
+  
+  .eb-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
+  
+  .eb-btn {
+    padding: 9px 22px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.2s;
+  }
+  .eb-btn:hover { opacity: 0.85; }
+  
+  .eb-btn--primary {
+    background: linear-gradient(135deg, #4f46e5, #3b82f6);
+    color: #fff;
+  }
+  
+  .eb-btn--secondary {
+    background: #f1f5f9;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+  }

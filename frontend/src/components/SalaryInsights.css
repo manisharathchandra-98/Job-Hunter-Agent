@@ -1,0 +1,31 @@
+.salary-insights { padding: 1.75rem; }
+.salary-title-line { font-size: 0.875rem; color: var(--text-muted); margin-top: -0.75rem; margin-bottom: 1.5rem; }
+
+.salary-numbers {
+  display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;
+}
+
+.salary-num-block {
+  flex: 1; min-width: 100px;
+  background: #f8fafc; border-radius: 8px;
+  padding: 0.875rem 1rem;
+  border-top: 3px solid var(--border);
+}
+.salary-num-block.median { border-top-color: var(--primary); background: var(--primary-light); }
+
+.salary-num-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-light); margin-bottom: 0.25rem; }
+.salary-num-value { font-size: 1.25rem; font-weight: 800; color: var(--text); }
+.salary-num-block.median .salary-num-value { color: var(--primary); }
+
+.range-bar    { height: 8px; background: linear-gradient(to right, #bfdbfe, #3b82f6, #1e40af); border-radius: 4px; position: relative; margin-bottom: 0.5rem; }
+.range-median-marker { position: absolute; top: -4px; width: 3px; height: 16px; background: #fff; border: 2px solid #1e40af; border-radius: 2px; transform: translateX(-50%); }
+.range-labels { display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+
+.salary-meta { display: flex; flex-wrap: wrap; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.meta-chip   { display: flex; align-items: center; gap: 0.5rem; }
+.meta-label  { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; }
+.meta-val    { font-size: 0.875rem; font-weight: 600; text-transform: capitalize; }
+
+.salary-note { margin-top: 0.75rem; font-size: 0.8125rem; color: var(--text-muted); line-height: 1.65; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+
+.salary-insights { border-left: 4px solid #8b5cf6; }

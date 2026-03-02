@@ -1,0 +1,105 @@
+.score-gauge { padding: 1.75rem; }
+
+.gauge-layout { display: flex; gap: 2rem; align-items: stretch; flex-wrap: wrap; }
+
+/* Left: big score number */
+.gauge-score-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1e3a5f 0%, #1e40af 100%);
+  border-radius: 10px;
+  padding: 2rem 2.5rem;
+  min-width: 160px;
+  flex-shrink: 0;
+}
+
+.gauge-number {
+  font-size: 4rem;
+  font-weight: 900;
+  color: #fff;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.gauge-max {
+  font-size: 0.875rem;
+  color: rgba(255,255,255,.6);
+  font-weight: 500;
+}
+
+.gauge-label {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: rgba(255,255,255,.9);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Right: breakdown bars */
+.gauge-details {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.detail-row:last-child { border-bottom: none; }
+.detail-key { font-size: 0.8125rem; color: var(--text-muted); font-weight: 500; }
+.detail-val { font-size: 0.875rem;  font-weight: 700; color: var(--text); text-transform: capitalize; }
+
+/* Breakdown bars */
+.breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.breakdown-item { display: flex; flex-direction: column; gap: 5px; }
+
+.breakdown-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.breakdown-track {
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.breakdown-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.8s ease;
+}
+
+.gauge-explanation {
+  margin-top: 1.25rem;
+  padding: 0.875rem 1rem;
+  background: #f8fafc;
+  border-left: 3px solid var(--primary);
+  border-radius: 0 6px 6px 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.65;
+}
+
+.score-gauge { border-left: 4px solid #3b82f6; }
