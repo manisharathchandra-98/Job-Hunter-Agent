@@ -19,7 +19,13 @@ function ScoreProjection({ data, matchScore }) {
   // Use the real pipeline match_score as current if Resume Coach received 0
   const rawCurrent = data.current_score ?? 0;
   const current_score = (rawCurrent === 0 && matchScore > 0) ? matchScore : rawCurrent;
-  const { projected_score = 0, confidence } = data;
+  const { confidence } = data;
+  // Clamp: projected must always be strictly greater than current.
+  // The AI sometimes returns a lower value when it didn't receive the real score.
+  const rawProjected = data.projected_score ?? 0;
+  const projected_score = rawProjected > current_score
+    ? rawProjected
+    : Math.min(current_score + 1, 100);
   const gain = projected_score - current_score;
 
   return (
