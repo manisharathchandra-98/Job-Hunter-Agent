@@ -1,27 +1,23 @@
+import { useState } from "react";
 import "./ResumeSuggestions.css";
 
-const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
-
-function PriorityBadge({ priority }) {
-  return (
-    <span className={`rs-badge rs-badge--${priority.toLowerCase()}`}>
-      {priority}
-    </span>
-  );
+/* ── small helpers ─────────────────────────────────────────────────────── */
+function Badge({ label, variant = "neutral" }) {
+  return <span className={`rs-badge rs-badge--${variant}`}>{label}</span>;
 }
 
-function ActionBadge({ action }) {
-  return (
-    <span className={`rs-action rs-action--${action.toLowerCase()}`}>
-      {action}
-    </span>
-  );
+function impactVariant(v = "") {
+  const s = v.toLowerCase();
+  if (s === "high")   return "high";
+  if (s === "medium") return "medium";
+  return "low";
 }
 
+/* ── ScoreProjection ───────────────────────────────────────────────────── */
 function ScoreProjection({ data }) {
   if (!data) return null;
-  const { current_score, projected_score, improvement_breakdown } = data;
-  const gain = projected_score - current_score;
+  const { current_score = 0, projected_score = 0, improvement_delta, confidence } = data;
+  const gain = improvement_delta ?? (projected_score - current_score);
 
   return (
     <div className="rs-score-projection">
@@ -43,58 +39,32 @@ function ScoreProjection({ data }) {
           <div className="rs-score-projection__gain">+{gain} pts</div>
         )}
       </div>
-      {improvement_breakdown && (
-        <div className="rs-score-projection__breakdown">
-          {Object.entries(improvement_breakdown).map(([key, val]) => (
-            <span key={key} className="rs-score-projection__pill">
-              {key.replace(/_/g, " ")}: <strong>{val}</strong>
-            </span>
-          ))}
+      {confidence && (
+        <div className="rs-score-projection__confidence">
+          Confidence: <Badge label={confidence} variant={impactVariant(confidence)} />
         </div>
       )}
     </div>
   );
 }
 
+/* ── PriorityChanges ───────────────────────────────────────────────────── */
+// Resume Coach returns: [{rank, change, impact, effort}]
 function PriorityChanges({ changes }) {
   if (!changes?.length) return null;
-
-  const sorted = [...changes].sort(
-    (a, b) => (PRIORITY_ORDER[a.priority] ?? 99) - (PRIORITY_ORDER[b.priority] ?? 99)
-  );
-
+  const sorted = [...changes].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   return (
     <div className="rs-section">
-      <h4 className="rs-section__title">Priority Changes</h4>
+      <h4 className="rs-section__title">🎯 Priority Changes</h4>
       <div className="rs-changes">
         {sorted.map((c, i) => (
-          <div key={i} className={`rs-change rs-change--${c.priority.toLowerCase()}`}>
+          <div key={i} className={`rs-change rs-change--${impactVariant(c.impact)}`}>
             <div className="rs-change__header">
-              <PriorityBadge priority={c.priority} />
-              <ActionBadge action={c.action} />
-              <span className="rs-change__section">{c.section}</span>
+              <span className="rs-change__rank">#{c.rank ?? i + 1}</span>
+              {c.impact && <Badge label={`Impact: ${c.impact}`} variant={impactVariant(c.impact)} />}
+              {c.effort && <Badge label={`Effort: ${c.effort}`} variant="neutral" />}
             </div>
-            <p className="rs-change__issue">{c.issue}</p>
-
-            {c.current_text ? (
-              <div className="rs-change__diff">
-                <div className="rs-change__before">
-                  <label>Before</label>
-                  <p>{c.current_text}</p>
-                </div>
-                <div className="rs-change__after">
-                  <label>After</label>
-                  <p>{c.suggested_text}</p>
-                </div>
-              </div>
-            ) : (
-              <div className="rs-change__add">
-                <label>Add this</label>
-                <p>{c.suggested_text}</p>
-              </div>
-            )}
-
-            <p className="rs-change__reason">💡 {c.reason}</p>
+            <p className="rs-change__issue">{c.change}</p>
           </div>
         ))}
       </div>
@@ -102,20 +72,20 @@ function PriorityChanges({ changes }) {
   );
 }
 
+/* ── KeywordsToAdd ─────────────────────────────────────────────────────── */
+// Resume Coach returns: [{keyword, context}]
 function KeywordsToAdd({ keywords }) {
   if (!keywords?.length) return null;
   return (
     <div className="rs-section">
-      <h4 className="rs-section__title">Keywords to Add</h4>
+      <h4 className="rs-section__title">🔑 Keywords to Add</h4>
       <div className="rs-keywords">
         {keywords.map((kw, i) => (
-          <div
-            key={i}
-            className={`rs-keyword rs-keyword--${kw.frequency_in_jd}`}
-            title={kw.example_usage}
-          >
+          <div key={i} className="rs-keyword">
             <span className="rs-keyword__word">{kw.keyword}</span>
-            <span className="rs-keyword__placement">{kw.suggested_placement}</span>
+            {kw.context && (
+              <span className="rs-keyword__placement">→ {kw.context}</span>
+            )}
           </div>
         ))}
       </div>
@@ -123,25 +93,29 @@ function KeywordsToAdd({ keywords }) {
   );
 }
 
+/* ── BulletRewrites ────────────────────────────────────────────────────── */
+// Resume Coach returns: [{original, improved, reason}]
 function BulletRewrites({ rewrites }) {
   if (!rewrites?.length) return null;
   return (
     <div className="rs-section">
-      <h4 className="rs-section__title">Bullet Point Rewrites</h4>
+      <h4 className="rs-section__title">✏️ Bullet Point Rewrites</h4>
       <div className="rs-rewrites">
         {rewrites.map((r, i) => (
           <div key={i} className="rs-rewrite">
-            <div className="rs-rewrite__type">{r.improvement_type}</div>
             <div className="rs-rewrite__diff">
               <div className="rs-rewrite__before">
                 <label>Original</label>
                 <p>{r.original}</p>
               </div>
               <div className="rs-rewrite__after">
-                <label>Rewritten</label>
-                <p>{r.rewritten}</p>
+                <label>Improved</label>
+                <p>{r.improved}</p>
               </div>
             </div>
+            {r.reason && (
+              <p className="rs-change__reason">💡 {r.reason}</p>
+            )}
           </div>
         ))}
       </div>
@@ -149,19 +123,19 @@ function BulletRewrites({ rewrites }) {
   );
 }
 
+/* ── NewBullets ────────────────────────────────────────────────────────── */
+// Resume Coach returns: array of strings
 function NewBullets({ bullets }) {
   if (!bullets?.length) return null;
   return (
     <div className="rs-section">
-      <h4 className="rs-section__title">New Bullets to Add</h4>
+      <h4 className="rs-section__title">➕ New Bullets to Add</h4>
       <div className="rs-new-bullets">
         {bullets.map((b, i) => (
           <div key={i} className="rs-new-bullet">
-            <div className="rs-new-bullet__meta">
-              <span className="rs-new-bullet__target">📌 {b.target_role_or_project}</span>
-              <span className="rs-new-bullet__gap">Addresses: {b.gap_addressed}</span>
-            </div>
-            <p className="rs-new-bullet__text">• {b.bullet}</p>
+            <p className="rs-new-bullet__text">
+              • {typeof b === "string" ? b : b.bullet ?? JSON.stringify(b)}
+            </p>
           </div>
         ))}
       </div>
@@ -169,40 +143,47 @@ function NewBullets({ bullets }) {
   );
 }
 
+/* ── SummaryRewrite ────────────────────────────────────────────────────── */
+// Resume Coach returns: a plain string
 function SummaryRewrite({ data }) {
-  if (!data?.suggested) return null;
+  // Accept both a plain string and an object with a `suggested` key
+  const text = typeof data === "string" ? data : data?.suggested;
+  if (!text) return null;
   return (
     <div className="rs-section">
-      <h4 className="rs-section__title">Professional Summary Rewrite</h4>
+      <h4 className="rs-section__title">📄 Professional Summary Rewrite</h4>
       <div className="rs-summary">
-        {data.original && (
-          <div className="rs-summary__original">
-            <label>Current</label>
-            <p>{data.original}</p>
-          </div>
-        )}
         <div className="rs-summary__suggested">
           <label>Suggested</label>
-          <p>{data.suggested}</p>
+          <p>{text}</p>
         </div>
-        {data.ats_keywords_included?.length > 0 && (
-          <div className="rs-summary__keywords">
-            <span>ATS keywords included: </span>
-            {data.ats_keywords_included.map((kw, i) => (
-              <span key={i} className="rs-summary__kw-chip">{kw}</span>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
+/* ── SkillsSectionRewrite ──────────────────────────────────────────────── */
+// Resume Coach returns: a plain string (multi-line)
 function SkillsSectionRewrite({ data }) {
+  // Accept both a plain string and an object with add/remove
   if (!data) return null;
+  if (typeof data === "string") {
+    return (
+      <div className="rs-section">
+        <h4 className="rs-section__title">🛠️ Skills Section Rewrite</h4>
+        <div className="rs-summary">
+          <div className="rs-summary__suggested">
+            <label>Suggested</label>
+            <pre className="rs-skills-pre">{data}</pre>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  // object form { add, remove, reorder_advice }
   return (
     <div className="rs-section">
-      <h4 className="rs-section__title">Skills Section Update</h4>
+      <h4 className="rs-section__title">🛠️ Skills Section Update</h4>
       <div className="rs-skills-rewrite">
         {data.add?.length > 0 && (
           <div className="rs-skills-rewrite__row">
@@ -232,34 +213,57 @@ function SkillsSectionRewrite({ data }) {
   );
 }
 
+/* ── Main export ───────────────────────────────────────────────────────── */
 export default function ResumeSuggestions({ suggestions }) {
-  // Don't render anything if no suggestions or if agent returned an error
+  const [open, setOpen] = useState(true);
+
   if (!suggestions || suggestions.error || Object.keys(suggestions).length === 0) {
     return null;
   }
 
+  // The Resume Coach returns PascalCase keys:
+  // ScoreProjection, PriorityChanges, KeywordsToAdd, BulletRewrites,
+  // NewBullets, SummaryRewrite, SkillsSectionRewrite, OverallStrategy
+  const {
+    ScoreProjection:      scoreProjection,
+    PriorityChanges:      priorityChanges,
+    KeywordsToAdd:        keywordsToAdd,
+    BulletRewrites:       bulletRewrites,
+    NewBullets:           newBullets,
+    SummaryRewrite:       summaryRewrite,
+    SkillsSectionRewrite: skillsSectionRewrite,
+    OverallStrategy:      overallStrategy,
+  } = suggestions;
+
   return (
     <div className="rs-wrapper">
-      <div className="rs-header">
-        <h3 className="rs-header__title">📝 Resume Improvement Suggestions</h3>
-        <p className="rs-header__subtitle">
-          Targeted changes to increase your match score for this role
-        </p>
+      <div className="rs-header" onClick={() => setOpen(o => !o)} style={{ cursor: "pointer" }}>
+        <div>
+          <h3 className="rs-header__title">📝 Resume Improvement Suggestions</h3>
+          <p className="rs-header__subtitle">
+            Targeted changes to increase your match score for this role
+          </p>
+        </div>
+        <span className="rs-header__toggle">{open ? "▲" : "▼"}</span>
       </div>
 
-      <ScoreProjection data={suggestions.estimated_score_after_changes} />
-      <PriorityChanges changes={suggestions.priority_changes} />
-      <KeywordsToAdd keywords={suggestions.keywords_to_add} />
-      <BulletRewrites rewrites={suggestions.bullet_rewrites} />
-      <NewBullets bullets={suggestions.new_bullets_to_add} />
-      <SummaryRewrite data={suggestions.summary_rewrite} />
-      <SkillsSectionRewrite data={suggestions.skills_section_rewrite} />
+      {open && (
+        <>
+          <ScoreProjection      data={scoreProjection} />
+          <PriorityChanges      changes={priorityChanges} />
+          <KeywordsToAdd        keywords={keywordsToAdd} />
+          <BulletRewrites       rewrites={bulletRewrites} />
+          <NewBullets           bullets={newBullets} />
+          <SummaryRewrite       data={summaryRewrite} />
+          <SkillsSectionRewrite data={skillsSectionRewrite} />
 
-      {suggestions.overall_strategy && (
-        <div className="rs-strategy">
-          <h4 className="rs-strategy__title">🎯 Overall Strategy</h4>
-          <p className="rs-strategy__text">{suggestions.overall_strategy}</p>
-        </div>
+          {overallStrategy && (
+            <div className="rs-strategy">
+              <h4 className="rs-strategy__title">🎯 Overall Strategy</h4>
+              <p className="rs-strategy__text">{overallStrategy}</p>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
