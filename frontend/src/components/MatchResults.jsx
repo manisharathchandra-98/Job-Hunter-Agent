@@ -103,7 +103,7 @@ function EmptyState() {
 }
 
 function MatchDetail({ match }) {
-  // Normalize aggregator's flat structure into what sub-components expect Ã¢â€â‚¬Ã¢â€â‚¬
+  // Normalize aggregator's flat structure into what sub-components expect
 
   // ScoreGauge: needs match_score, score_breakdown, recommendation etc.
   const matchResult = match.match_result ?? {
@@ -126,7 +126,7 @@ function MatchDetail({ match }) {
     market_position: rawSalary.market_position,
     market_demand:   rawSalary.market_demand,
     salary_note:     rawSalary.market_insight ?? null,
-    // Map flat value Ã¢â€ â€™ range that SalaryInsights renders as a bar
+    // Map flat value -> range that SalaryInsights renders as a bar
     market_value: rawSalary.market_value ?? (rawSalary.candidate_market_value ? {
       salary_low:    Math.round(rawSalary.candidate_market_value * 0.85),
       salary_median: rawSalary.candidate_market_value,
@@ -212,7 +212,7 @@ function MatchDetail({ match }) {
         <SalaryInsights  salaryData={salaryData}   parsedJob={parsedJob} />
       </div>
 
-      <ResumeSuggestions suggestions={match.resume_suggestions} matchScore={match.match_score}/>
+      <ResumeSuggestions suggestions={match.resume_suggestions} matchScore={match.match_score ?? 0} />
       <RawJson data={match} />
     </div>
   )
@@ -225,7 +225,7 @@ function HistoryList({ history, onSelect }) {
     <div style={{marginTop:'1rem',display:'flex',flexDirection:'column',gap:'0.625rem'}} className="fade-in">
       <p style={{fontSize:'0.875rem',color:'var(--text-muted)',fontWeight:500}}>{matches.length} match{matches.length!==1?'es':''} found</p>
       {matches.map(m => {
-        const score = m.match_result?.match_score ?? 'Ã¢â‚¬â€'
+        const score = m.match_result?.match_score ?? '--'
         const rec   = m.match_result?.recommendation ?? ''
         const title = m.parsed_job?.job_title ?? 'Unknown role'
         const date  = m.created_at ? new Date(m.created_at).toLocaleDateString() : ''
@@ -253,7 +253,7 @@ function RawJson({ data }) {
   return (
     <div className="raw-json-wrap card">
       <button className="raw-json-toggle" onClick={() => setOpen(o => !o)}>
-      {open ? '▲' : '▼'} Raw JSON response
+        {open ? '\u25B2' : '\u25BC'} Raw JSON response
       </button>
       {open && <pre className="raw-json">{JSON.stringify(data, null, 2)}</pre>}
     </div>
