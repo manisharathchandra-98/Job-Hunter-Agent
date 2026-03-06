@@ -28,7 +28,7 @@ export default function MatchResults({ initialMatch }) {
     try {
       const { data, status } = await getMatch(lookupId.trim())
       if (status === 200)      { setMatchData(data); setView('result') }
-      else if (status === 202) setError('Still processing Ã¢â‚¬â€ check back in a moment.')
+      else if (status === 202) setError('Still processing - check back in a moment.')
       else                     setError(data?.error || 'Match not found.')
     } catch (err) { setError(err.message) }
     finally { setLoading(false) }
@@ -94,7 +94,7 @@ export default function MatchResults({ initialMatch }) {
 function EmptyState() {
   return (
     <div className="empty-state card fade-in">
-      <div className="empty-icon">Ã°Å¸â€œÅ </div>
+      <div className="empty-icon">📄</div>
       <h3>No result yet</h3>
       <p>Go to <strong>Analyze Resume</strong> and submit a resume + job description. Results appear here automatically.</p>
       <p style={{fontSize:'0.875rem',color:'var(--text-muted)'}}>Or use <strong>Look up by ID</strong> if you have a match ID.</p>
@@ -103,7 +103,7 @@ function EmptyState() {
 }
 
 function MatchDetail({ match }) {
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Normalize aggregator's flat structure into what sub-components expect Ã¢â€â‚¬Ã¢â€â‚¬
+  // Normalize aggregator's flat structure into what sub-components expect Ã¢â€â‚¬Ã¢â€â‚¬
 
   // ScoreGauge: needs match_score, score_breakdown, recommendation etc.
   const matchResult = match.match_result ?? {
@@ -190,7 +190,7 @@ function MatchDetail({ match }) {
           {match.match_id && (
             <div className="meta-item">
               <span className="meta-label">Match ID</span>
-              <code className="meta-code">{match.match_id.slice(0, 8)}Ã¢â‚¬Â¦</code>
+              <code className="meta-code">{match.match_id.slice(0, 8)}...</code>
             </div>
           )}
           {match.created_at && (
@@ -253,7 +253,7 @@ function RawJson({ data }) {
   return (
     <div className="raw-json-wrap card">
       <button className="raw-json-toggle" onClick={() => setOpen(o => !o)}>
-        {open ? 'Ã¢â€“Â²' : 'Ã¢â€“Â¼'} Raw JSON response
+      {open ? '▲' : '▼'} Raw JSON response
       </button>
       {open && <pre className="raw-json">{JSON.stringify(data, null, 2)}</pre>}
     </div>

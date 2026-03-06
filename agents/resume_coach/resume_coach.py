@@ -160,6 +160,8 @@ def _call_bedrock(prompt: str) -> dict:
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
 
+        raw = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw)
+
         return json.loads(raw)
 
     except json.JSONDecodeError as e:
