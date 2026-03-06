@@ -111,17 +111,19 @@ Identified skill gaps:
 Analyze the resume against the job description and provide highly specific, actionable
 improvement suggestions. Be concrete - don't say "add more details", say exactly WHAT to add.
 
-IMPORTANT: The projected_score in ScoreProjection MUST be greater than or equal to the
-current_score ({overall_score}). You are suggesting improvements, so the score can only
-stay the same or go up - never down.
+IMPORTANT RULES FOR ScoreProjection:
+1. current_score MUST be {overall_score} (the actual current score, do not change it)
+2. projected_score MUST be strictly greater than {overall_score} (since you are suggesting improvements)
+3. projected_score MUST be between {overall_score + 1} and 100
+4. improvement_delta = projected_score - {overall_score} (must be a positive number)
 
 Return ONLY a valid JSON object with exactly these keys:
 
 {{
   "ScoreProjection": {{
     "current_score": {overall_score},
-    "projected_score": <integer >= {overall_score} and <= 100, MUST be higher than current>,
-    "improvement_delta": <projected_score minus {overall_score}>,
+    "projected_score": <integer strictly greater than {overall_score}, up to 100>,
+    "improvement_delta": <projected_score minus {overall_score}, must be positive>,
     "confidence": "High|Medium|Low"
   }},
   "PriorityChanges": [
@@ -169,18 +171,31 @@ def _call_bedrock(prompt: str, current_score: int = 0) -> dict:
 
         result = json.loads(raw)
 
-        # ── Safety clamp: projected score must never be below current score ──
+        # ── Safety clamp: projected score must always be > current score ──────
         proj = result.get("ScoreProjection", {})
         if proj:
-            projected = proj.get("projected_score", current_score)
-            if isinstance(projected, (int, float)) and projected < current_score:
+            projected   = proj.get("projected_score", current_score)
+            # Use whichever is higher: the value passed in OR what the AI
+            # returned as current_score (guards against Step Functions passing 0)
+            ai_current  = proj.get("current_score", 0)
+            effective   = max(current_score, ai_current)
+
+            if not isinstance(projected, (int, float)) or projected <= effective:
+                # Force at least +1 above current, capped at 100
+                clamped = min(effective + 1, 100)
                 logger.warning(
-                    "Clamping projected_score %s -> %s (was below current)",
-                    projected, current_score
+                    "Clamping projected_score %s -> %s (current=%s, ai_current=%s)",
+                    projected, clamped, current_score, ai_current
                 )
-                proj["projected_score"] = current_score
-                proj["improvement_delta"] = 0
-                result["ScoreProjection"] = proj
+                proj["projected_score"]  = clamped
+                proj["improvement_delta"] = clamped - effective
+
+            # Always make sure current_score in the JSON matches what we know
+            if effective > 0:
+                proj["current_score"]     = effective
+                proj["improvement_delta"] = proj["projected_score"] - effective
+
+            result["ScoreProjection"] = proj
 
         return result
 
