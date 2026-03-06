@@ -200,7 +200,10 @@ jobs:
         run: npm install -g aws-cdk
 
       - name: Install Python dependencies
-        run: pip install poetry && poetry install --no-root
+        run: |
+          pip install poetry
+          poetry install --no-root
+          pip install aws-cdk-lib constructs
 
       - name: CDK Bootstrap
         working-directory: infrastructure
