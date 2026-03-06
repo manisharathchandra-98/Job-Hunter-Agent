@@ -36,7 +36,7 @@ def lambda_handler(event, context):
     try:
         # ── Extract inputs ──────────────────────────────────────────
         resume_text  = event.get("resume_text", "")
-        jd_text      = event.get("jd_text", "")
+        jd_text      = event.get("jd_text", event.get("job_description", ""))
         match_id     = event.get("match_id", "")
         overall_score = event.get("overall_score", 0)
         skill_gaps   = event.get("skill_gaps", [])
