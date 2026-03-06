@@ -351,3 +351,17 @@
     .rs-score-projection__scores { justify-content: center; }
     .rs-score-projection__gain { margin-left: 0; }
   }
+
+  .rs-skills-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  
+  .rs-skills-line {
+    word-break: break-word;
+    overflow-wrap: break-word;
+    white-space: normal;
+    line-height: 1.6;
+    margin: 0;
+  }

@@ -14,10 +14,13 @@ function impactVariant(v = "") {
 }
 
 /* ── ScoreProjection ───────────────────────────────────────────────────── */
-function ScoreProjection({ data }) {
+function ScoreProjection({ data, matchScore }) {
   if (!data) return null;
-  const { current_score = 0, projected_score = 0, improvement_delta, confidence } = data;
-  const gain = improvement_delta ?? (projected_score - current_score);
+  // Use the real pipeline match_score as current if Resume Coach received 0
+  const rawCurrent = data.current_score ?? 0;
+  const current_score = (rawCurrent === 0 && matchScore > 0) ? matchScore : rawCurrent;
+  const { projected_score = 0, confidence } = data;
+  const gain = projected_score - current_score;
 
   return (
     <div className="rs-score-projection">
@@ -165,16 +168,21 @@ function SummaryRewrite({ data }) {
 /* ── SkillsSectionRewrite ──────────────────────────────────────────────── */
 // Resume Coach returns: a plain string (multi-line)
 function SkillsSectionRewrite({ data }) {
-  // Accept both a plain string and an object with add/remove
   if (!data) return null;
   if (typeof data === "string") {
+    // Split on newlines and render each line so text wraps naturally
+    const lines = data.split("\n").filter(l => l.trim() !== "");
     return (
       <div className="rs-section">
         <h4 className="rs-section__title">🛠️ Skills Section Rewrite</h4>
         <div className="rs-summary">
           <div className="rs-summary__suggested">
             <label>Suggested</label>
-            <pre className="rs-skills-pre">{data}</pre>
+            <div className="rs-skills-lines">
+              {lines.map((line, i) => (
+                <p key={i} className="rs-skills-line">{line}</p>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -214,7 +222,7 @@ function SkillsSectionRewrite({ data }) {
 }
 
 /* ── Main export ───────────────────────────────────────────────────────── */
-export default function ResumeSuggestions({ suggestions }) {
+export default function ResumeSuggestions({ suggestions, matchScore = 0 }) {
   const [open, setOpen] = useState(true);
 
   if (!suggestions || suggestions.error || Object.keys(suggestions).length === 0) {
@@ -249,7 +257,7 @@ export default function ResumeSuggestions({ suggestions }) {
 
       {open && (
         <>
-          <ScoreProjection      data={scoreProjection} />
+          <ScoreProjection      data={scoreProjection} matchScore={matchScore} />
           <PriorityChanges      changes={priorityChanges} />
           <KeywordsToAdd        keywords={keywordsToAdd} />
           <BulletRewrites       rewrites={bulletRewrites} />
