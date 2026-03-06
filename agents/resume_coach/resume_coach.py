@@ -10,10 +10,10 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-REGION          = os.environ.get("AWS_REGION", "us-east-1")
-MODEL_ID        = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
+REGION       = os.environ.get("AWS_REGION", "us-east-1")
+MODEL_ID     = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
 DYNAMO_TABLE = os.environ.get("MATCHES_TABLE_NAME", os.environ.get("DYNAMODB_TABLE", "Matches"))
-USE_RAG         = os.environ.get("USE_RAG", "true").lower() == "true"
+USE_RAG      = os.environ.get("USE_RAG", "true").lower() == "true"
 
 bedrock  = boto3.client("bedrock-runtime", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
@@ -35,12 +35,12 @@ def lambda_handler(event, context):
 
     try:
         # ── Extract inputs ──────────────────────────────────────────
-        resume_text  = event.get("resume_text", "")
-        jd_text      = event.get("jd_text", event.get("job_description", ""))
-        match_id     = event.get("match_id", "")
-        overall_score = event.get("overall_score", 0)
-        skill_gaps   = event.get("skill_gaps", [])
-        job_title    = event.get("job_title", "Software Engineer")
+        resume_text     = event.get("resume_text", "")
+        jd_text         = event.get("jd_text", event.get("job_description", ""))
+        match_id        = event.get("match_id", "")
+        overall_score   = event.get("overall_score", 0)
+        skill_gaps      = event.get("skill_gaps", [])
+        job_title       = event.get("job_title", "Software Engineer")
         required_skills = event.get("required_skills", [])
 
         if not resume_text or not jd_text or not match_id:
@@ -59,7 +59,7 @@ def lambda_handler(event, context):
         )
 
         # ── Call Bedrock ────────────────────────────────────────────
-        suggestions = _call_bedrock(prompt)
+        suggestions = _call_bedrock(prompt, overall_score)
 
         # ── Persist to DynamoDB ─────────────────────────────────────
         _save_suggestions(match_id, suggestions)
@@ -109,15 +109,19 @@ Identified skill gaps:
 
 ## Your Task
 Analyze the resume against the job description and provide highly specific, actionable
-improvement suggestions. Be concrete — don't say "add more details", say exactly WHAT to add.
+improvement suggestions. Be concrete - don't say "add more details", say exactly WHAT to add.
+
+IMPORTANT: The projected_score in ScoreProjection MUST be greater than or equal to the
+current_score ({overall_score}). You are suggesting improvements, so the score can only
+stay the same or go up - never down.
 
 Return ONLY a valid JSON object with exactly these keys:
 
 {{
   "ScoreProjection": {{
     "current_score": {overall_score},
-    "projected_score": <number 0-100>,
-    "improvement_delta": <projected - current>,
+    "projected_score": <integer >= {overall_score} and <= 100, after implementing ALL suggestions>,
+    "improvement_delta": <projected_score minus {overall_score}>,
     "confidence": "High|Medium|Low"
   }},
   "PriorityChanges": [
@@ -145,7 +149,7 @@ Return ONLY a valid JSON object with exactly these keys:
 Return ONLY the JSON, no markdown, no explanation."""
 
 
-def _call_bedrock(prompt: str) -> dict:
+def _call_bedrock(prompt: str, current_score: int = 0) -> dict:
     try:
         response = bedrock.converse(
             modelId=MODEL_ID,
@@ -160,9 +164,25 @@ def _call_bedrock(prompt: str) -> dict:
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
 
+        # Strip control characters that break JSON parsing
         raw = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw)
 
-        return json.loads(raw)
+        result = json.loads(raw)
+
+        # ── Safety clamp: projected score must never be below current score ──
+        proj = result.get("ScoreProjection", {})
+        if proj:
+            projected = proj.get("projected_score", current_score)
+            if isinstance(projected, (int, float)) and projected < current_score:
+                logger.warning(
+                    "Clamping projected_score %s -> %s (was below current)",
+                    projected, current_score
+                )
+                proj["projected_score"] = current_score
+                proj["improvement_delta"] = 0
+                result["ScoreProjection"] = proj
+
+        return result
 
     except json.JSONDecodeError as e:
         logger.error("Failed to parse Bedrock JSON: %s", str(e))
