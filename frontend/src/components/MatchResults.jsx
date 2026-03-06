@@ -212,7 +212,7 @@ function MatchDetail({ match }) {
         <SalaryInsights  salaryData={salaryData}   parsedJob={parsedJob} />
       </div>
 
-      <ResumeSuggestions suggestions={match.resume_suggestions} />
+      <ResumeSuggestions suggestions={match.resume_suggestions} matchScore={match.match_score}/>
       <RawJson data={match} />
     </div>
   )
