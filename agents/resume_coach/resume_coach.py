@@ -120,7 +120,7 @@ Return ONLY a valid JSON object with exactly these keys:
 {{
   "ScoreProjection": {{
     "current_score": {overall_score},
-    "projected_score": <integer >= {overall_score} and <= 100, after implementing ALL suggestions>,
+    "projected_score": <integer >= {overall_score} and <= 100, MUST be higher than current>,
     "improvement_delta": <projected_score minus {overall_score}>,
     "confidence": "High|Medium|Low"
   }},
