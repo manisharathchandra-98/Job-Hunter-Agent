@@ -1,0 +1,23 @@
+# Terraform files
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/override.tf
+terraform/.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform plan files
+tfplan
+tfplan.json
+
+# Builds directory
+builds/
+*.zip
+
+# Local environment
+.env
+.env.local

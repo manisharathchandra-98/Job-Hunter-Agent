@@ -1,0 +1,153 @@
+{
+    "Comment": "Job Fit Analyzer multi-agent orchestration workflow",
+    "StartAt": "ParseJob",
+    "States": {
+      "ParseJob": {
+        "Type": "Task",
+        "Resource": "arn:aws:lambda:us-east-1:596432516213:function:job-analyzer-agent-parser",
+        "Next": "EstimateSkills",
+        "Retry": [
+          {
+            "ErrorEquals": ["States.TaskFailed"],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 3,
+            "BackoffRate": 2.0
+          }
+        ],
+        "Catch": [
+          {
+            "ErrorEquals": ["States.ALL"],
+            "Next": "JobParsingFailed"
+          }
+        ]
+      },
+      "EstimateSkills": {
+        "Type": "Task",
+        "Resource": "arn:aws:lambda:us-east-1:596432516213:function:job-analyzer-agent-skills",
+        "Next": "EmbedResume",
+        "Retry": [
+          {
+            "ErrorEquals": ["States.TaskFailed"],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 3,
+            "BackoffRate": 2.0
+          }
+        ],
+        "Catch": [
+          {
+            "ErrorEquals": ["States.ALL"],
+            "Next": "SkillsEstimationFailed"
+          }
+        ]
+      },
+      "EmbedResume": {
+        "Type": "Task",
+        "Resource": "arn:aws:lambda:us-east-1:596432516213:function:job-analyzer-agent-gaps",
+        "Next": "CalculateDifficulty",
+        "Retry": [
+          {
+            "ErrorEquals": ["States.TaskFailed"],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 3,
+            "BackoffRate": 2.0
+          }
+        ],
+        "Catch": [
+          {
+            "ErrorEquals": ["States.ALL"],
+            "Next": "ResumEmbeddingFailed"
+          }
+        ]
+      },
+      "CalculateDifficulty": {
+        "Type": "Task",
+        "Resource": "arn:aws:lambda:us-east-1:596432516213:function:job-analyzer-agent-difficulty",
+        "Next": "AggregateResults",
+        "Retry": [
+          {
+            "ErrorEquals": ["States.TaskFailed"],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 3,
+            "BackoffRate": 2.0
+          }
+        ],
+        "Catch": [
+          {
+            "ErrorEquals": ["States.ALL"],
+            "Next": "DifficultyCalculationFailed"
+          }
+        ]
+      },
+      "AggregateResults": {
+        "Type": "Task",
+        "Resource": "arn:aws:lambda:us-east-1:596432516213:function:job-analyzer-agent-aggregator",
+        "Next": "GenerateResumerCoaching",
+        "Retry": [
+          {
+            "ErrorEquals": ["States.TaskFailed"],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 3,
+            "BackoffRate": 2.0
+          }
+        ],
+        "Catch": [
+          {
+            "ErrorEquals": ["States.ALL"],
+            "Next": "AggregationFailed"
+          }
+        ]
+      },
+      "GenerateResumerCoaching": {
+        "Type": "Task",
+        "Resource": "arn:aws:lambda:us-east-1:596432516213:function:job-analyzer-agent-resume-coach",
+        "Next": "Success",
+        "Retry": [
+          {
+            "ErrorEquals": ["States.TaskFailed"],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 3,
+            "BackoffRate": 2.0
+          }
+        ],
+        "Catch": [
+          {
+            "ErrorEquals": ["States.ALL"],
+            "Next": "ResumCoachingFailed"
+          }
+        ]
+      },
+      "Success": {
+        "Type": "Succeed"
+      },
+      "JobParsingFailed": {
+        "Type": "Fail",
+        "Error": "JobParsingFailed",
+        "Cause": "Failed to parse job description"
+      },
+      "SkillsEstimationFailed": {
+        "Type": "Fail",
+        "Error": "SkillsEstimationFailed",
+        "Cause": "Failed to estimate required skills"
+      },
+      "ResumEmbeddingFailed": {
+        "Type": "Fail",
+        "Error": "ResumeEmbeddingFailed",
+        "Cause": "Failed to embed resume and identify skill gaps"
+      },
+      "DifficultyCalculationFailed": {
+        "Type": "Fail",
+        "Error": "DifficultyCalculationFailed",
+        "Cause": "Failed to calculate match difficulty"
+      },
+      "AggregationFailed": {
+        "Type": "Fail",
+        "Error": "AggregationFailed",
+        "Cause": "Failed to aggregate results"
+      },
+      "ResumCoachingFailed": {
+        "Type": "Fail",
+        "Error": "ResumCoachingFailed",
+        "Cause": "Failed to generate resume coaching"
+      }
+    }
+  }
